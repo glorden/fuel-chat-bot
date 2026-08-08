@@ -17,6 +17,9 @@ venv/
 # Logs
 *.log
 
+# Test cache
+.pytest_cache/
+
 # vkbottle runtime state (Long Poll ts checkpoint)
 .vkbottle/
 
