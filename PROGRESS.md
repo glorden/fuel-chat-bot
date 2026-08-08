@@ -2,7 +2,7 @@
 
 Статус этапов. Дизайн — в [ARCHITECTURE.md](ARCHITECTURE.md).
 
-- [x] **Этап 0 — Инициализация репозитория** (2026-08-08): git-репозиторий, `.gitignore`, README/CLAUDE/ARCHITECTURE/PROGRESS, `requirements.txt`, `.env.example`.
+- [x] **Этап 0 — Инициализация репозитория** (2026-08-08): git-репозиторий, `.gitignore`, README/CLAUDE/ARCHITECTURE/PROGRESS, `requirements.txt`, `.env.example`, подключён и запушен GitHub — https://github.com/glorden/fuel-chat-bot.
 - [ ] **Этап 1 — VK-пламбинг**: включение возможностей бота, права бота в беседе, минимальный скрипт Long Poll с логированием входящих событий.
 - [ ] **Этап 2 — Тихий сбор данных**: схема БД, `gazetteer.yaml`, `prefilter`/`extract`/`resolve_station`, запись отчётов в БД без ответов в чат, оффлайн-прогон по истории беседы.
 - [ ] **Этап 3 — MVP вопрос-ответ**: `qa.py`, шаблоны ответов, оба триггер-режима, защита от флуда.

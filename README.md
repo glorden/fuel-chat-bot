@@ -13,8 +13,8 @@
 ## Установка
 
 ```bash
-git clone <URL этого репозитория>
-cd <папка проекта>
+git clone https://github.com/glorden/fuel-chat-bot.git
+cd fuel-chat-bot
 python -m venv .venv
 .venv\Scripts\activate      # Windows
 pip install -r requirements.txt
