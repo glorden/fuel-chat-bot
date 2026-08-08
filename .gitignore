@@ -14,6 +14,12 @@ venv/
 # Claude Code local settings
 .claude/settings.local.json
 
+# Logs
+*.log
+
+# vkbottle runtime state (Long Poll ts checkpoint)
+.vkbottle/
+
 # OS
 .DS_Store
 Thumbs.db
