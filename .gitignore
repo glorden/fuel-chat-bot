@@ -9,6 +9,8 @@ venv/
 
 # Data
 *.db
+*.db-shm
+*.db-wal
 *.sqlite3
 
 # Claude Code local settings

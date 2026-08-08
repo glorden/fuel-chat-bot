@@ -11,6 +11,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("vk_bot")
 
 bot = Bot(token=VK_TOKEN)
+# По умолчанию vkbottle не парсит markup-упоминания (ABCMessageView.replace_mention
+# = False), из-за чего message.is_mentioned/message.mention всегда молчат — без
+# этого явно включённого флага бот не видит, что его тегнули.
+bot.labeler.message_view.replace_mention = True
 register_handlers(bot)
 
 if __name__ == "__main__":

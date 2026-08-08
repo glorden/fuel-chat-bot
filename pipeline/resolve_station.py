@@ -24,6 +24,11 @@ for _station in _STATIONS:
     _station["_brand_re"] = _compile(_station["brand_aliases"])
     _station["_location_re"] = _compile(_station["location_aliases"])
 _BRAND_COUNTS = Counter(s["brand"] for s in _STATIONS)
+_STATIONS_BY_ID = {s["id"]: s for s in _STATIONS}
+
+
+def get_station_name(station_id: str) -> str:
+    return _STATIONS_BY_ID[station_id]["name"]
 
 
 def resolve_station(text: str) -> str | None:

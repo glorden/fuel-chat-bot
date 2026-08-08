@@ -140,7 +140,7 @@ def test_process_message_end_to_end_against_temp_db():
         conn, text="РН лесной, 95 есть на 4,5 колонке. Очередь.",
         peer_id=2000000001, conversation_message_id=1, author_id=111,
     )
-    assert outcome == "report:rosneft_lesnoy_79"
+    assert outcome.label == "report:rosneft_lesnoy_79"
     row = conn.execute("SELECT station_id, fuel_grade, status, queue_note FROM fuel_report").fetchone()
     assert row == ("rosneft_lesnoy_79", "95", "available", "есть очередь")
 
@@ -148,18 +148,22 @@ def test_process_message_end_to_end_against_temp_db():
         conn, text="В Янишполе появился 95-й бензин заправилась за 12 минут работают все колонки",
         peer_id=2000000001, conversation_message_id=2, author_id=112,
     )
-    assert outcome == "unresolved"
+    assert outcome.label == "unresolved"
     row = conn.execute("SELECT raw_text FROM unresolved_mention").fetchone()
     assert row[0].startswith("В Янишполе")
 
+    # Вопрос по станции, для которой только что записали свежий отчёт —
+    # должен вернуться содержательный reply_text, а не просто ярлык.
     outcome = process_message(
-        conn, text="Сейчас 95 где есть?",
+        conn, text="РН лесной 95 есть?",
         peer_id=2000000001, conversation_message_id=3, author_id=113,
     )
-    assert outcome == "question"
+    assert outcome.label == "question"
+    assert "95" in outcome.reply_text
+    assert "есть" in outcome.reply_text
 
     outcome = process_message(
         conn, text="Спасибо",
         peer_id=2000000001, conversation_message_id=4, author_id=111,
     )
-    assert outcome == "off_topic"
+    assert outcome.label == "off_topic"

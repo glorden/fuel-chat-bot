@@ -1,9 +1,17 @@
 import sqlite3
+from dataclasses import dataclass
 
 from db import repo
 from pipeline.extract import extract
 from pipeline.prefilter import is_on_topic
+from pipeline.qa import answer_question
 from pipeline.resolve_station import resolve_station
+
+
+@dataclass
+class PipelineOutcome:
+    label: str
+    reply_text: str | None = None
 
 
 def process_message(
@@ -13,20 +21,20 @@ def process_message(
     peer_id: int,
     conversation_message_id: int,
     author_id: int,
-) -> str:
-    """Run one message through the pipeline. Returns a short outcome label for logging/tests."""
+) -> PipelineOutcome:
+    """Run one message through the pipeline."""
     if not is_on_topic(text):
-        return "off_topic"
+        return PipelineOutcome("off_topic")
 
     result = extract(text)
 
     if result.message_type == "irrelevant":
-        return "irrelevant"
+        return PipelineOutcome("irrelevant")
 
     if result.message_type == "question":
-        # Ответы на вопросы — Stage 3 (qa.py). Здесь только классификация,
-        # в БД для report/unresolved вопрос не пишем.
-        return "question"
+        station_id = resolve_station(text)
+        reply_text = answer_question(conn, station_id=station_id, grades=result.question_grades)
+        return PipelineOutcome("question", reply_text=reply_text)
 
     station_id = resolve_station(text)
     if station_id is None:
@@ -37,7 +45,7 @@ def process_message(
             author_id=author_id,
             raw_text=text,
         )
-        return "unresolved"
+        return PipelineOutcome("unresolved")
 
     for report in result.reports:
         repo.insert_fuel_report(
@@ -50,4 +58,4 @@ def process_message(
             author_id=author_id,
             raw_text=text,
         )
-    return f"report:{station_id}"
+    return PipelineOutcome(f"report:{station_id}")
