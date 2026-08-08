@@ -7,7 +7,7 @@ _GRADE_TOKEN = re.compile(
 _NEGATION_WORDS = ("нет", "закончил", "кончил", "пуст", "не осталось")
 
 _QUESTION_MARKERS = re.compile(
-    r"(?i)\bгде\b|\bподскаж\w*|\bкто\s+знает\b|\bкто\s+в\s+курсе\b|\bесть\s+ли\b|\?"
+    r"(?i)\bгде\b|\bкогда\b|\bподскаж\w*|\bкто\s+знает\b|\bкто\s+в\s+курсе\b|\bесть\s+ли\b|\?"
 )
 
 _NO_QUEUE = re.compile(r"(?i)очеред\w*\s+нет|нет\s+очеред\w*|без\s+очеред\w*")

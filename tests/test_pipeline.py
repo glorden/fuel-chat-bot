@@ -5,7 +5,12 @@ from pipeline.extract import ReportItem, extract
 from pipeline.pipeline import process_message
 from pipeline.prefilter import is_on_topic
 from pipeline.resolve_station import resolve_station
-from tests.fixtures import OFF_TOPIC_OR_NO_SIGNAL, QUESTIONS, REPORTS
+from tests.fixtures import (
+    OFF_TOPIC_OR_NO_SIGNAL,
+    QUESTIONS,
+    REPORTS,
+    REPORTS_WITH_UNKNOWN_STATION,
+)
 
 
 def test_prefilter_flags_real_reports_and_questions_as_on_topic():
@@ -21,6 +26,13 @@ def test_questions_classified_and_grades_extracted():
         "Добрый вечер! Подскажите, пожалуйста, по наличию 92 Медгора - Пудож": ["92"],
         "Где в городе есть 95": ["95"],
         "На ТН на Шуйском шоссе есть 95?": ["95"],
+        "Здравствуйте. Газпром есть 95? Может знает кто-нибудь \U0001F64F": ["95"],
+        "Подскажите сколько лимит на Роснефти": [],
+        "Скиньте инфу когда появится 95 в Вилге пжл.": ["95"],
+        "Добрый вечер. У РБ на РН 95 на каких колонках есть?": ["95"],
+        "Будет тех перерыв на РН на Лососинском с 21-22 ч?": [],
+        "Здравствуйте всем! Подскажите есть ли на Роснефть на Лесном, 79 (возле поворота на объездную) 92-й?": ["92"],
+        "Есть еще 95 на РН на Лососинском и нет ли тех перерыва?": ["95"],
     }
     for text, grades in expected_grades.items():
         result = extract(text)
@@ -52,6 +64,40 @@ def test_reports_classified_with_grade_status_and_queue():
     result = extract("Нет 95го в янишполе\n92 и ДТ")
     grades_status = {r.grade: r.status for r in result.reports}
     assert grades_status == {"95": "unavailable", "92": "available", "ДТ": "available"}
+
+    result = extract("РН на лыжной-95 на 1 и 2 колонке")
+    assert result.reports == [ReportItem("95", "available")]
+    assert result.queue_note is None
+
+    result = extract("опти на суоярвском 92-й без очереди и ограничений")
+    assert result.reports == [ReportItem("92", "available")]
+    assert result.queue_note == "без очереди"
+
+    # Многоклаузное сообщение про две марки на одной АЗС. Обе марки и статусы
+    # извлекаются верно; queue_note берётся по первому совпавшему сигналу на
+    # весь текст ("нет очереди" из клаузы про 92) — известное упрощение:
+    # per-клаузного разбора очереди по каждой марке отдельно пока нет.
+    result = extract(
+        "На РН лоссосинское около РБ 95 только на 1 и 2 колонке . "
+        "92 нет очереди на остальных колонках . Очередь медленно идёт"
+    )
+    grades_status = {r.grade: r.status for r in result.reports}
+    assert grades_status == {"95": "available", "92": "available"}
+    assert result.queue_note == "без очереди"
+
+
+def test_resolve_station_handles_typos_and_landmark_aliases():
+    # Опечатка "лоссосинское" (реальная, из лога) всё равно резолвится.
+    assert resolve_station("На РН лоссосинское около РБ 95 есть") == "rosneft_lososinskoe"
+    # "РБ" как самостоятельный ориентир рядом с этой же станцией.
+    assert resolve_station("Добрый вечер. У РБ на РН 95 на каких колонках есть?") == "rosneft_lososinskoe"
+    assert resolve_station("Лукойл на лососинском, 95 есть") == "lukoil_lososinskoe"
+    assert resolve_station("РН на лыжной-95 на 1 и 2 колонке") == "rosneft_lyzhnaya"
+
+
+def test_reports_with_unknown_station_stay_unresolved():
+    for text in REPORTS_WITH_UNKNOWN_STATION:
+        assert resolve_station(text) is None, text
 
 
 def test_resolve_station_matches_known_aliases():
