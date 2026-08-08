@@ -1,0 +1,5 @@
+vkbottle>=4
+rapidfuzz>=3
+PyYAML>=6
+python-dotenv>=1
+pytest>=8
