@@ -1,10 +1,10 @@
+import re
+from collections import Counter
 from pathlib import Path
 
 import yaml
-from rapidfuzz import fuzz
 
 _GAZETTEER_PATH = Path(__file__).resolve().parent.parent / "gazetteer.yaml"
-_FUZZY_THRESHOLD = 90
 
 
 def _load_stations() -> list[dict]:
@@ -12,25 +12,43 @@ def _load_stations() -> list[dict]:
     return data["stations"]
 
 
+def _compile(stems: list[str]) -> re.Pattern | None:
+    if not stems:
+        return None
+    alternation = "|".join(re.escape(s) for s in stems)
+    return re.compile(rf"(?i)\b(?:{alternation})\w*\b")
+
+
 _STATIONS = _load_stations()
+for _station in _STATIONS:
+    _station["_brand_re"] = _compile(_station["brand_aliases"])
+    _station["_location_re"] = _compile(_station["location_aliases"])
+_BRAND_COUNTS = Counter(s["brand"] for s in _STATIONS)
 
 
 def resolve_station(text: str) -> str | None:
-    text_low = text.lower()
+    """Матчит станцию по бренду; если у бренда несколько точек — ещё и по локации.
 
-    substring_matches = [
-        (len(alias), station["id"])
-        for station in _STATIONS
-        for alias in station["aliases"]
-        if alias in text_low
-    ]
-    if substring_matches:
-        return max(substring_matches)[1]
+    Голое упоминание бренда с несколькими точками (например "РН" без адреса,
+    когда у Роснефти их четыре) намеренно не резолвится ни в одну из них.
 
-    best_id, best_score = None, 0
+    Если бренд вообще не упомянут (например "заправился на суоярвском" без
+    слова "роснефть"/"рн"), пробуем резолвить по локации одной — если её
+    алиас уникально указывает на одну-единственную станцию среди всех.
+    """
+    qualified = []
+    brand_mentioned = False
     for station in _STATIONS:
-        for alias in station["aliases"]:
-            score = fuzz.partial_ratio(alias, text_low)
-            if score > best_score:
-                best_score, best_id = score, station["id"]
-    return best_id if best_score >= _FUZZY_THRESHOLD else None
+        if not station["_brand_re"] or not station["_brand_re"].search(text):
+            continue
+        brand_mentioned = True
+        if _BRAND_COUNTS[station["brand"]] == 1 or (
+            station["_location_re"] and station["_location_re"].search(text)
+        ):
+            qualified.append(station["id"])
+
+    if brand_mentioned:
+        return qualified[0] if len(qualified) == 1 else None
+
+    location_only = [s["id"] for s in _STATIONS if s["_location_re"] and s["_location_re"].search(text)]
+    return location_only[0] if len(location_only) == 1 else None

@@ -58,12 +58,25 @@ def test_resolve_station_matches_known_aliases():
     assert resolve_station("РН лесной, 95 есть на 4,5 колонке. Очередь.") == "rosneft_lesnoy_79"
     assert resolve_station("Лукойл Вилга только 92 на табло, очереди нет") == "lukoil_vilga"
     assert resolve_station("Татнефть силикатный только дт") == "tatneft_silikatny"
+    # Подтверждено пользователем: "РН на Комсомольском" = "РН у Ленты" — одна и та же точка.
+    assert resolve_station("Не подскажите РН на Комсомольском есть 95?") == "rosneft_komsomolsky"
+    assert resolve_station("РН у Ленты, 95 есть") == "rosneft_komsomolsky"
+    # Подтверждено: "суоярвский" и "на объездной" — локальные названия той же АЗС, что и "Лесной 79".
+    assert resolve_station("Заправился на суоярвском, 92 есть") == "rosneft_lesnoy_79"
+    assert resolve_station("РН на объездной, дт есть") == "rosneft_lesnoy_79"
+
+
+def test_resolve_station_distinguishes_different_brands_on_same_road():
+    assert resolve_station("Татнефть на Шуйском шоссе, 95 есть") == "tatneft_shuyskoe"
+    assert resolve_station("Лукойл на Шуйском шоссе, 95 есть") == "lukoil_shuyskoe"
+    assert resolve_station("Опти Шуйское, 95 есть") == "opti_shuyskoe"
+    # ТН на Шуйском шоссе — это другая точка, не Татнефть Ключевая.
+    assert resolve_station("На ТН на Шуйском шоссе есть 95?") == "tatneft_shuyskoe"
 
 
 def test_resolve_station_does_not_guess_ambiguous_or_unknown_locations():
-    # "РН на Комсомольском" — реальная точка не подтверждена и не в газетире,
-    # резолвер не должен путать её с "рн лесной"/"рн лыжная".
-    assert resolve_station("Не подскажите РН на Комсомольском есть 95?") is None
+    # Голое упоминание бренда с несколькими точками без локации — не угадываем.
+    assert resolve_station("На РН везде вроде") is None
     # Янишполе — посёлок, а не конкретная АЗС из газетира.
     assert resolve_station("В Янишполе появился 95-й бензин") is None
 
