@@ -35,7 +35,8 @@ def _latest_facts(conn: sqlite3.Connection, station_id: str, grades: list[str] |
     facts = []
     for grade, rows in by_grade.items():
         _, status, queue_note, reported_at = rows[0]
-        age_minutes = (now - datetime.fromisoformat(reported_at)).total_seconds() / 60
+        reported_dt = datetime.fromisoformat(reported_at)
+        age_minutes = (now - reported_dt).total_seconds() / 60
 
         conflicting = False
         if len(rows) == 2:
@@ -48,6 +49,7 @@ def _latest_facts(conn: sqlite3.Connection, station_id: str, grades: list[str] |
                 grade=grade,
                 status=status,
                 queue_note=queue_note,
+                reported_at=reported_dt,
                 age_minutes=age_minutes,
                 tier=_tier_for_age(age_minutes),
                 conflicting=conflicting,

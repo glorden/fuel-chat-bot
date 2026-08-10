@@ -1,7 +1,9 @@
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from db.schema import get_connection
+from pipeline.facts import MOSCOW_TZ
 from pipeline.qa import answer_question
 
 
@@ -41,9 +43,9 @@ def test_answer_question_fresh_fact_has_no_staleness_caveat():
     conn = get_connection(":memory:")
     _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue_note="без очереди", minutes_ago=5)
     text = answer_question(conn, station_id="lukoil_vilga", grades=["92"])
-    assert "92: есть, без очереди" in text
-    assert "5 мин назад" in text
-    assert "не совсем свежие" not in text
+    assert re.search(r"на \d{2}:\d{2}, без очереди\.", text)
+    assert "92 - Есть" in text
+    assert "устарело" not in text
     assert "старые" not in text
 
 
@@ -53,7 +55,7 @@ def test_answer_question_stale_and_very_stale_fact_show_caveats():
     conn = get_connection(":memory:")
     _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue_note=None, minutes_ago=300)
     text = answer_question(conn, station_id="lukoil_vilga", grades=["92"])
-    assert "не совсем свежие" in text
+    assert "устарело" in text
 
     conn2 = get_connection(":memory:")
     _insert_report(conn2, station_id="lukoil_vilga", grade="92", status="available", queue_note=None, minutes_ago=500)
@@ -66,8 +68,8 @@ def test_answer_question_flags_conflicting_recent_reports():
     _insert_report(conn, station_id="tatneft_silikatny", grade="95", status="unavailable", queue_note=None, minutes_ago=30)
     _insert_report(conn, station_id="tatneft_silikatny", grade="95", status="available", queue_note=None, minutes_ago=5)
     text = answer_question(conn, station_id="tatneft_silikatny", grades=["95"])
-    assert "95: есть" in text
-    assert "нестабильна" in text
+    assert "95 - Есть" in text
+    assert "было иначе" in text
 
 
 def test_answer_question_old_conflicting_report_not_flagged():
@@ -75,4 +77,32 @@ def test_answer_question_old_conflicting_report_not_flagged():
     _insert_report(conn, station_id="tatneft_silikatny", grade="95", status="unavailable", queue_note=None, minutes_ago=999)
     _insert_report(conn, station_id="tatneft_silikatny", grade="95", status="available", queue_note=None, minutes_ago=5)
     text = answer_question(conn, station_id="tatneft_silikatny", grades=["95"])
-    assert "нестабильна" not in text
+    assert "было иначе" not in text
+
+
+def test_answer_question_groups_same_status_grades_on_one_line():
+    conn = get_connection(":memory:")
+    _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue_note=None, minutes_ago=5)
+    _insert_report(conn, station_id="lukoil_vilga", grade="95", status="available", queue_note=None, minutes_ago=5)
+    _insert_report(conn, station_id="lukoil_vilga", grade="98", status="unavailable", queue_note=None, minutes_ago=5)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=["92", "95", "98"])
+    assert "92, 95 - Есть" in text
+    assert "98 - Нет" in text
+
+
+def test_answer_question_header_time_matches_freshest_report():
+    conn = get_connection(":memory:")
+    _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue_note=None, minutes_ago=120)
+    _insert_report(conn, station_id="lukoil_vilga", grade="95", status="available", queue_note=None, minutes_ago=5)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=["92", "95"])
+    expected_time = (datetime.now(timezone.utc) - timedelta(minutes=5)).astimezone(MOSCOW_TZ).strftime("%H:%M")
+    assert expected_time in text
+
+
+def test_answer_question_differing_queue_notes_shown_per_group():
+    conn = get_connection(":memory:")
+    _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue_note="без очереди", minutes_ago=5)
+    _insert_report(conn, station_id="lukoil_vilga", grade="95", status="available", queue_note="~15 мин", minutes_ago=5)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=["92", "95"])
+    assert "92 - Есть, без очереди" in text
+    assert "95 - Есть, ~15 мин" in text
