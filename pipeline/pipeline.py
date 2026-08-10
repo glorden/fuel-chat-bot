@@ -18,13 +18,15 @@ class PipelineOutcome:
     reply_text: str | None = None
 
 
-def _analyze(text: str) -> tuple[ExtractResult, str | None]:
+def _analyze(text: str, *, previous_message: str | None = None) -> tuple[ExtractResult, str | None]:
     """Классификация+извлечение+резолв станции. Пробует LLM (если включён),
-    при любом сбое или если LLM выключен — текущий rule-based путь."""
+    при любом сбое или если LLM выключен — текущий rule-based путь.
+    `previous_message` идёт только в LLM-ветку — rule-based про него не
+    знает и не должен, у него нет механизма его использовать."""
     if LLM_ENABLED:
         from llm.client import analyze as llm_analyze
 
-        llm_result = llm_analyze(text)
+        llm_result = llm_analyze(text, previous_message=previous_message)
         if llm_result is not None:
             log.info(
                 "path=llm message_type=%s station_id=%s",
@@ -47,17 +49,20 @@ def process_message(
     conversation_message_id: int,
     author_id: int,
     own_text: str | None = None,
+    previous_message: str | None = None,
 ) -> PipelineOutcome:
     """Run one message through the pipeline. `text` may be enriched with
     quoted reply/forward context (see vk_handlers.py); `own_text` — what the
-    author actually typed themselves, defaults to `text` when not given."""
+    author actually typed themselves, defaults to `text` when not given.
+    `previous_message` — the same author's previous on-topic message, used
+    only by the LLM path to resolve implicit references (see _analyze)."""
     if own_text is None:
         own_text = text
 
     if not is_on_topic(text):
         return PipelineOutcome("off_topic")
 
-    result, station_id = _analyze(text)
+    result, station_id = _analyze(text, previous_message=previous_message)
 
     if result.message_type == "irrelevant":
         return PipelineOutcome("irrelevant")

@@ -11,7 +11,7 @@ def test_uses_llm_result_when_available(monkeypatch):
     monkeypatch.setattr(
         llm.client,
         "analyze",
-        lambda text: LLMAnalysis(
+        lambda text, previous_message=None: LLMAnalysis(
             extract_result=ExtractResult(message_type="report", reports=[ReportItem("95", "available")]),
             station_id="rosneft_lesnoy_79",
         ),
@@ -31,7 +31,7 @@ def test_uses_llm_result_when_available(monkeypatch):
 
 def test_falls_back_to_rule_based_when_llm_returns_none(monkeypatch):
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", True)
-    monkeypatch.setattr(llm.client, "analyze", lambda text: None)
+    monkeypatch.setattr(llm.client, "analyze", lambda text, previous_message=None: None)
     conn = get_connection(":memory:")
 
     outcome = process_message(
@@ -44,7 +44,7 @@ def test_falls_back_to_rule_based_when_llm_returns_none(monkeypatch):
 def test_llm_disabled_never_calls_llm_client(monkeypatch):
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
 
-    def _boom(text):
+    def _boom(text, previous_message=None):
         raise AssertionError("llm.client.analyze не должен вызываться при LLM_ENABLED=False")
 
     monkeypatch.setattr(llm.client, "analyze", _boom)
@@ -55,3 +55,28 @@ def test_llm_disabled_never_calls_llm_client(monkeypatch):
         peer_id=1, conversation_message_id=1, author_id=1,
     )
     assert outcome.label == "report:tatneft_silikatny"
+
+
+def test_previous_message_threaded_to_llm_analyze(monkeypatch):
+    # rule-based (extract()) не имеет параметра previous_message вообще —
+    # эта проверка именно про то, что LLM-ветка его реально получает.
+    monkeypatch.setattr(pipeline_module, "LLM_ENABLED", True)
+    received = {}
+
+    def _fake_analyze(text, previous_message=None):
+        received["text"] = text
+        received["previous_message"] = previous_message
+        return LLMAnalysis(
+            extract_result=ExtractResult(message_type="question", question_grades=[]),
+            station_id="gazprom",
+        )
+
+    monkeypatch.setattr(llm.client, "analyze", _fake_analyze)
+    conn = get_connection(":memory:")
+
+    process_message(
+        conn, text="большая очередь?", previous_message="95 есть на Газпроме?",
+        peer_id=1, conversation_message_id=1, author_id=1,
+    )
+    assert received["text"] == "большая очередь?"
+    assert received["previous_message"] == "95 есть на Газпроме?"

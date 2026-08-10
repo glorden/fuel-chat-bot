@@ -4,7 +4,7 @@ import logging
 from groq import Groq
 
 from config import GROQ_API_KEY, LLM_MODEL, LLM_TIMEOUT_SECONDS
-from llm.prompts import build_system_prompt
+from llm.prompts import build_system_prompt, build_user_content
 from llm.schema import PARAMETERS_SCHEMA, TOOL_DESCRIPTION, TOOL_NAME
 
 log = logging.getLogger("vk_bot")
@@ -22,7 +22,7 @@ _SYSTEM_PROMPT = build_system_prompt()
 _client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 
-def raw_analyze(text: str) -> dict | None:
+def raw_analyze(text: str, *, previous_message: str | None = None) -> dict | None:
     """Разбор сообщения через Groq. Возвращает сырой dict аргументов
     вызванной функции, либо None при любом сбое/неожиданном ответе —
     сигнал диспетчеру (llm/client.py) откатиться на rule-based."""
@@ -34,7 +34,7 @@ def raw_analyze(text: str) -> dict | None:
             model=LLM_MODEL,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": text},
+                {"role": "user", "content": build_user_content(text, previous_message=previous_message)},
             ],
             tools=[_TOOL_SCHEMA],
             tool_choice={"type": "function", "function": {"name": TOOL_NAME}},

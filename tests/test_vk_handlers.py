@@ -1,4 +1,7 @@
-from vk_handlers import _quoted_context_text
+import time
+
+import vk_handlers
+from vk_handlers import _quoted_context_text, _recent_author_message
 
 
 class _FakeForeign:
@@ -40,3 +43,26 @@ def test_quoted_context_text_skips_empty_texts():
         reply_message=_FakeForeign(None),
     )
     assert _quoted_context_text(msg) == ""
+
+
+def test_recent_author_message_returns_none_when_no_entry():
+    assert _recent_author_message((999999, 888888)) is None
+
+
+def test_recent_author_message_returns_fresh_entry():
+    key = (999999, 888889)
+    vk_handlers._last_author_message[key] = ("95 есть на Газпроме?", time.monotonic())
+    try:
+        assert _recent_author_message(key) == "95 есть на Газпроме?"
+    finally:
+        del vk_handlers._last_author_message[key]
+
+
+def test_recent_author_message_expires_after_ttl():
+    key = (999999, 888890)
+    expired_at = time.monotonic() - vk_handlers._AUTHOR_CONTEXT_TTL_SECONDS - 1
+    vk_handlers._last_author_message[key] = ("95 есть на Газпроме?", expired_at)
+    try:
+        assert _recent_author_message(key) is None
+    finally:
+        del vk_handlers._last_author_message[key]

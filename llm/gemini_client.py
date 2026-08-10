@@ -4,7 +4,7 @@ from google import genai
 from google.genai import types
 
 from config import GEMINI_API_KEY, GEMINI_MODEL, LLM_TIMEOUT_SECONDS
-from llm.prompts import build_system_prompt
+from llm.prompts import build_system_prompt, build_user_content
 from llm.schema import PARAMETERS_SCHEMA, TOOL_DESCRIPTION, TOOL_NAME
 
 log = logging.getLogger("vk_bot")
@@ -58,7 +58,7 @@ _client = (
 )
 
 
-def raw_analyze(text: str) -> dict | None:
+def raw_analyze(text: str, *, previous_message: str | None = None) -> dict | None:
     """Разбор сообщения через Gemini. Возвращает сырой dict аргументов
     вызванной функции, либо None при любом сбое/неожиданном ответе —
     сигнал диспетчеру (llm/client.py) откатиться на rule-based."""
@@ -67,7 +67,7 @@ def raw_analyze(text: str) -> dict | None:
     try:
         response = _client.models.generate_content(
             model=GEMINI_MODEL,
-            contents=text,
+            contents=build_user_content(text, previous_message=previous_message),
             config=_GENERATE_CONFIG,
         )
         calls = response.function_calls
