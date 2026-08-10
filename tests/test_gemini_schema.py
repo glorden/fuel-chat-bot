@@ -29,3 +29,17 @@ def test_does_not_mutate_original_schema():
     original_station_id_type = PARAMETERS_SCHEMA["properties"]["station_id"]["type"]
     _to_gemini_schema(PARAMETERS_SCHEMA)
     assert PARAMETERS_SCHEMA["properties"]["station_id"]["type"] == original_station_id_type
+
+
+def test_recurses_into_nested_nullable_object_break_info():
+    # break_info — первый вложенный object-тип в схеме (не просто nullable
+    # строка и не items внутри array) — конвертер должен раскрыть nullable
+    # и на сам объект, и на каждое его вложенное поле.
+    result = _to_gemini_schema(PARAMETERS_SCHEMA)
+    break_info_schema = result["properties"]["break_info"]
+    assert break_info_schema["type"] == "object"
+    assert break_info_schema["nullable"] is True
+    assert break_info_schema["properties"]["kind"]["type"] == "string"
+    assert break_info_schema["properties"]["kind"]["nullable"] is True
+    assert break_info_schema["properties"]["until"]["nullable"] is True
+    assert break_info_schema["properties"]["duration_note"]["nullable"] is True

@@ -1,5 +1,8 @@
+from datetime import datetime
+
 from llm.client import _parse_arguments
-from pipeline.extract import ReportItem
+from pipeline.extract import BreakInfo, ReportItem
+from pipeline.facts import MOSCOW_TZ
 
 
 def test_parse_valid_report():
@@ -89,3 +92,104 @@ def test_parse_treats_unknown_station_id_as_none():
     result = _parse_arguments(raw)
     assert result is not None
     assert result.station_id is None
+
+
+def test_parse_valid_break_info():
+    raw = {
+        "message_type": "report",
+        "station_id": "lukoil_vilga",
+        "reports": [],
+        "question_grades": [],
+        "queue_note": None,
+        "break_info": {"kind": "слив", "until": None, "duration_note": "минут 40"},
+    }
+    result = _parse_arguments(raw)
+    assert result is not None
+    assert result.extract_result.break_info == BreakInfo(kind="слив", until=None, duration_note="минут 40")
+
+
+def test_parse_break_info_with_valid_until_converts_to_clock_time():
+    raw = {
+        "message_type": "report",
+        "station_id": "gazprom",
+        "reports": [],
+        "question_grades": [],
+        "queue_note": None,
+        "break_info": {"kind": "перерыв", "until": "22:00", "duration_note": None},
+    }
+    result = _parse_arguments(raw)
+    assert result.extract_result.break_info.kind == "перерыв"
+    until_dt = datetime.fromisoformat(result.extract_result.break_info.until)
+    assert until_dt.astimezone(MOSCOW_TZ).strftime("%H:%M") == "22:00"
+
+
+def test_parse_break_info_drops_invalid_kind_but_keeps_rest():
+    raw = {
+        "message_type": "report",
+        "station_id": "gazprom",
+        "reports": [],
+        "question_grades": [],
+        "queue_note": None,
+        "break_info": {"kind": "апокалипсис", "until": None, "duration_note": "минут 40"},
+    }
+    result = _parse_arguments(raw)
+    assert result.extract_result.break_info.kind is None
+    assert result.extract_result.break_info.duration_note == "минут 40"
+
+
+def test_parse_break_info_drops_malformed_until_without_raising():
+    for bad_until in ("25:99", "не время", "22", 1234, [], {}):
+        raw = {
+            "message_type": "report",
+            "station_id": "gazprom",
+            "reports": [],
+            "question_grades": [],
+            "queue_note": None,
+            "break_info": {"kind": "перерыв", "until": bad_until, "duration_note": None},
+        }
+        result = _parse_arguments(raw)
+        assert result is not None
+        assert result.extract_result.break_info.until is None, bad_until
+
+
+def test_parse_break_info_collapses_all_null_fields_to_none():
+    raw = {
+        "message_type": "report",
+        "station_id": "gazprom",
+        "reports": [{"grade": "95", "status": "available"}],
+        "question_grades": [],
+        "queue_note": None,
+        "break_info": {"kind": None, "until": None, "duration_note": None},
+    }
+    result = _parse_arguments(raw)
+    assert result.extract_result.break_info is None
+
+
+def test_parse_ignores_break_info_when_message_type_is_not_report():
+    # break_info гейтится через message_type — даже если модель ошибочно
+    # прислала непустой break_info на вопрос, он не должен долететь дальше.
+    raw = {
+        "message_type": "question",
+        "station_id": "gazprom",
+        "reports": [],
+        "question_grades": [],
+        "queue_note": None,
+        "break_info": {"kind": "слив", "until": None, "duration_note": "минут 40"},
+    }
+    result = _parse_arguments(raw)
+    assert result.extract_result.break_info is None
+
+
+def test_parse_missing_break_info_key_is_treated_as_none():
+    # Совместимость с raw-словарями без ключа break_info вообще (как во
+    # всех тестах выше, написанных до Этапа 12).
+    raw = {
+        "message_type": "report",
+        "station_id": "gazprom",
+        "reports": [{"grade": "95", "status": "available"}],
+        "question_grades": [],
+        "queue_note": None,
+    }
+    result = _parse_arguments(raw)
+    assert result is not None
+    assert result.extract_result.break_info is None
