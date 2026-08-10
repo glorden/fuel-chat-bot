@@ -134,6 +134,16 @@ def test_resolve_station_matches_known_aliases():
     # Подтверждено: "суоярвский" и "на объездной" — локальные названия той же АЗС, что и "Лесной 79".
     assert resolve_station("Заправился на суоярвском, 92 есть") == "rosneft_lesnoy_79"
     assert resolve_station("РН на объездной, дт есть") == "rosneft_lesnoy_79"
+    # rosneft_lesnoy_40 — отдельная станция на той же улице, резолвится
+    # только по номеру дома (40/38) БЕЗ слова "лесной" рядом — само слово
+    # "лесной"/"лесном" всегда независимо матчит и rosneft_lesnoy_79 тоже
+    # (у неё алиас "лесн" не убирали), так что фразы вида "на лесном 40"
+    # уходят в None (см. следующий тест), а не в новую станцию. Известное
+    # ограничение резолвера (алиас matches "где угодно в тексте", не по
+    # близости к номеру), не баг конкретно этой записи.
+    assert resolve_station("РН 40, есть 95?") == "rosneft_lesnoy_40"
+    assert resolve_station("Роснефть 38, есть дт?") == "rosneft_lesnoy_40"
+    assert resolve_station("На лесном 40 рн перерыв?") is None
 
 
 def test_resolve_station_distinguishes_different_brands_on_same_road():
