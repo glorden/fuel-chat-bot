@@ -1,8 +1,9 @@
 import sqlite3
 from dataclasses import dataclass
 
+from config import LLM_ENABLED
 from db import repo
-from pipeline.extract import extract
+from pipeline.extract import ExtractResult, extract
 from pipeline.prefilter import is_on_topic
 from pipeline.qa import answer_question
 from pipeline.resolve_station import resolve_station
@@ -12,6 +13,21 @@ from pipeline.resolve_station import resolve_station
 class PipelineOutcome:
     label: str
     reply_text: str | None = None
+
+
+def _analyze(text: str) -> tuple[ExtractResult, str | None]:
+    """Классификация+извлечение+резолв станции. Пробует LLM (если включён),
+    при любом сбое или если LLM выключен — текущий rule-based путь."""
+    if LLM_ENABLED:
+        from llm.client import analyze as llm_analyze
+
+        llm_result = llm_analyze(text)
+        if llm_result is not None:
+            return llm_result.extract_result, llm_result.station_id
+
+    result = extract(text)
+    station_id = resolve_station(text) if result.message_type != "irrelevant" else None
+    return result, station_id
 
 
 def process_message(
@@ -26,17 +42,15 @@ def process_message(
     if not is_on_topic(text):
         return PipelineOutcome("off_topic")
 
-    result = extract(text)
+    result, station_id = _analyze(text)
 
     if result.message_type == "irrelevant":
         return PipelineOutcome("irrelevant")
 
     if result.message_type == "question":
-        station_id = resolve_station(text)
         reply_text = answer_question(conn, station_id=station_id, grades=result.question_grades)
         return PipelineOutcome("question", reply_text=reply_text)
 
-    station_id = resolve_station(text)
     if station_id is None:
         repo.insert_unresolved_mention(
             conn,
