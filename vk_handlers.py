@@ -92,8 +92,8 @@ def register_handlers(bot: Bot) -> None:
             author_id=message.from_id,
         )
         log.info(
-            "peer_id=%s from_id=%s outcome=%s text=%r",
-            message.peer_id, message.from_id, outcome.label, message.text,
+            "peer_id=%s from_id=%s outcome=%s own_text=%r quoted=%r prev_msg=%r",
+            message.peer_id, message.from_id, outcome.label, own_text, quoted_text or None, previous_message,
         )
 
         reply_text = outcome.reply_text if outcome.label == "question" else None
