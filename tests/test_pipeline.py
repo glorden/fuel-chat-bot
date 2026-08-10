@@ -19,6 +19,16 @@ def test_prefilter_flags_real_reports_and_questions_as_on_topic():
         assert is_on_topic(text), text
 
 
+def test_prefilter_catches_grade_with_ordinal_suffix_without_hyphen():
+    # Реальный баг, найден 2026-08-10: "95й"/"98е" без дефиса не матчили
+    # цифровую ветку паттерна (не было \w* после 9[258]/100, в отличие от
+    # всех остальных веток) — "92-й" с дефисом работал только случайно,
+    # т.к. сам дефис уже не-\w и даёт границу слова.
+    assert is_on_topic("На 1й и 2й только 95е топливо")
+    assert is_on_topic("95й есть")
+    assert is_on_topic("100й пропал")
+
+
 def test_questions_classified_and_grades_extracted():
     expected_grades = {
         "Сейчас 95 где есть?": ["95"],
@@ -131,9 +141,15 @@ def test_resolve_station_matches_known_aliases():
     # Подтверждено пользователем: "РН на Комсомольском" = "РН у Ленты" — одна и та же точка.
     assert resolve_station("Не подскажите РН на Комсомольском есть 95?") == "rosneft_komsomolsky"
     assert resolve_station("РН у Ленты, 95 есть") == "rosneft_komsomolsky"
-    # Подтверждено: "суоярвский" и "на объездной" — локальные названия той же АЗС, что и "Лесной 79".
-    assert resolve_station("Заправился на суоярвском, 92 есть") == "rosneft_lesnoy_79"
+    # Подтверждено: "объездная" — локальное название той же АЗС, что и "Лесной 79".
     assert resolve_station("РН на объездной, дт есть") == "rosneft_lesnoy_79"
+    # "суоярвск" с 2026-08-10 — алиас СРАЗУ у двух станций разных брендов
+    # (rosneft_lesnoy_79 и tatneft_silikatny, подтверждено пользователем) —
+    # голое "на суоярвском" без бренда теперь реально неоднозначно, а с
+    # явным брендом резолвится однозначно в свою станцию.
+    assert resolve_station("Заправился на суоярвском, 92 есть") is None
+    assert resolve_station("РН на суоярвском, 92 есть") == "rosneft_lesnoy_79"
+    assert resolve_station("Татнефть на суоярвском, 92 есть") == "tatneft_silikatny"
     # rosneft_lesnoy_40 — отдельная станция на той же улице, резолвится
     # только по номеру дома (40/38) БЕЗ слова "лесной" рядом — само слово
     # "лесной"/"лесном" всегда независимо матчит и rosneft_lesnoy_79 тоже
@@ -144,6 +160,23 @@ def test_resolve_station_matches_known_aliases():
     assert resolve_station("РН 40, есть 95?") == "rosneft_lesnoy_40"
     assert resolve_station("Роснефть 38, есть дт?") == "rosneft_lesnoy_40"
     assert resolve_station("На лесном 40 рн перерыв?") is None
+
+
+def test_resolve_station_handles_lukoil_outside_petrozavodsk():
+    # Кондопога/Янишполе — одна и та же АЗС Лукойл вне города, подтверждено
+    # пользователем 2026-08-10.
+    assert resolve_station("Лукойл в Кондопоге, 95 есть") == "lukoil_yanishpole"
+    assert resolve_station("В Янишполе на Лукойле 92 есть") == "lukoil_yanishpole"
+
+
+def test_resolve_station_gazprom_defaults_to_petrozavodsk():
+    # Газпром с 2026-08-10 — две точки (Петрозаводск и Березовка вне города).
+    # Голое упоминание бренда без адреса ни одной точки резолвится в
+    # станцию "по умолчанию" (Петрозаводск), а не в null, как было бы у
+    # обычного многоточечного бренда — подтверждено пользователем.
+    assert resolve_station("Газпром есть 95?") == "gazprom"
+    assert resolve_station("на газпроме 92 есть") == "gazprom"
+    assert resolve_station("Газпром Березовка, есть 95?") == "gazprom_berezovka"
 
 
 def test_resolve_station_distinguishes_different_brands_on_same_road():
@@ -171,8 +204,9 @@ def test_opti_has_two_stations_bare_brand_no_longer_resolves():
 def test_resolve_station_does_not_guess_ambiguous_or_unknown_locations():
     # Голое упоминание бренда с несколькими точками без локации — не угадываем.
     assert resolve_station("На РН везде вроде") is None
-    # Янишполе — посёлок, а не конкретная АЗС из газетира.
-    assert resolve_station("В Янишполе появился 95-й бензин") is None
+    # Пряжа — посёлок, а не конкретная АЗС из газетира (Янишполе с
+    # 2026-08-10 больше не такой пример — см. lukoil_yanishpole).
+    assert resolve_station("В Пряже появился 95-й бензин") is None
 
 
 def test_off_topic_and_no_signal_messages_produce_no_structured_data():
@@ -193,12 +227,12 @@ def test_process_message_end_to_end_against_temp_db():
     assert row == ("rosneft_lesnoy_79", "95", "available", "есть очередь")
 
     outcome = process_message(
-        conn, text="В Янишполе появился 95-й бензин заправилась за 12 минут работают все колонки",
+        conn, text="Заправился в Пряже, 92 есть",
         peer_id=2000000001, conversation_message_id=2, author_id=112,
     )
     assert outcome.label == "unresolved"
     row = conn.execute("SELECT raw_text FROM unresolved_mention").fetchone()
-    assert row[0].startswith("В Янишполе")
+    assert row[0].startswith("Заправился в Пряже")
 
     # Вопрос по станции, для которой только что записали свежий отчёт —
     # должен вернуться содержательный reply_text, а не просто ярлык.

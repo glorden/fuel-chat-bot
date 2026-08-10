@@ -25,6 +25,9 @@ for _station in _STATIONS:
     _station["_location_re"] = _compile(_station["location_aliases"])
 _BRAND_COUNTS = Counter(s["brand"] for s in _STATIONS)
 _STATIONS_BY_ID = {s["id"]: s for s in _STATIONS}
+_DEFAULT_STATION_BY_BRAND = {
+    s["brand"]: s["id"] for s in _STATIONS if s.get("default_for_brand")
+}
 
 
 def get_station_name(station_id: str) -> str:
@@ -39,25 +42,33 @@ def resolve_station(text: str) -> str | None:
     """Матчит станцию по бренду; если у бренда несколько точек — ещё и по локации.
 
     Голое упоминание бренда с несколькими точками (например "РН" без адреса,
-    когда у Роснефти их четыре) намеренно не резолвится ни в одну из них.
+    когда у Роснефти их четыре) намеренно не резолвится ни в одну из них —
+    кроме брендов с назначенной default_for_brand станцией (сейчас только
+    Газпром): если ни одна точка бренда не подошла по локации, а сам бренд
+    упомянут и однозначен (не смешан с другим брендом в том же сообщении),
+    возвращаем станцию по умолчанию вместо null.
 
     Если бренд вообще не упомянут (например "заправился на суоярвском" без
     слова "роснефть"/"рн"), пробуем резолвить по локации одной — если её
     алиас уникально указывает на одну-единственную станцию среди всех.
     """
     qualified = []
-    brand_mentioned = False
+    matched_brands = set()
     for station in _STATIONS:
         if not station["_brand_re"] or not station["_brand_re"].search(text):
             continue
-        brand_mentioned = True
+        matched_brands.add(station["brand"])
         if _BRAND_COUNTS[station["brand"]] == 1 or (
             station["_location_re"] and station["_location_re"].search(text)
         ):
             qualified.append(station["id"])
 
-    if brand_mentioned:
-        return qualified[0] if len(qualified) == 1 else None
+    if matched_brands:
+        if len(qualified) == 1:
+            return qualified[0]
+        if not qualified and len(matched_brands) == 1:
+            return _DEFAULT_STATION_BY_BRAND.get(next(iter(matched_brands)))
+        return None
 
     location_only = [s["id"] for s in _STATIONS if s["_location_re"] and s["_location_re"].search(text)]
     return location_only[0] if len(location_only) == 1 else None
