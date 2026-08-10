@@ -142,10 +142,13 @@ def test_resolve_station_distinguishes_different_brands_on_same_road():
     assert resolve_station("Опти Шуйское, 95 есть") == "opti_shuyskoe"
     # ТН на Шуйском шоссе — это другая точка, не Татнефть Ключевая.
     assert resolve_station("На ТН на Шуйском шоссе есть 95?") == "tatneft_shuyskoe"
-    # Татнефть на объездной — четвёртая точка бренда, есть свой алиас
-    # "объездн", уже занятый rosneft_lesnoy_79 (другой бренд — не конфликт).
-    assert resolve_station("Татнефть на объездной, есть 92-95?") == "tatneft_obiezdnaya"
-    assert resolve_station("Подскажите пожалуйста Лукойл на Заводской есть 92?") == "lukoil_zavodskaya"
+    # "объездная" — алиас tatneft_silikatny (она же tatneft_obiezdnaya,
+    # объединены 2026-08-10), уже занят rosneft_lesnoy_79 и lukoil_lesnoy
+    # (другой бренд — не конфликт).
+    assert resolve_station("Татнефть на объездной, есть 92-95?") == "tatneft_silikatny"
+    # "заводская" — алиас lukoil_shuyskoe (она же lukoil_zavodskaya,
+    # объединены 2026-08-10).
+    assert resolve_station("Подскажите пожалуйста Лукойл на Заводской есть 92?") == "lukoil_shuyskoe"
 
 
 def test_opti_has_two_stations_bare_brand_no_longer_resolves():
