@@ -36,6 +36,18 @@ def _answer_for_parent_message(message: Message) -> str | None:
     return answer_question(_conn, station_id=station_id, grades=parent_result.question_grades)
 
 
+async def _mention_tag(bot: Bot, user_id: int) -> str:
+    """Тег вида "[id...|Имя], " для явного упоминания адресата в ответе.
+    Пустая строка, если user_id — не пользователь (например, сообщение
+    пришло от сообщества)."""
+    if user_id <= 0:
+        return ""
+    users = await bot.api.users.get(user_ids=[user_id])
+    if not users:
+        return ""
+    return f"[id{user_id}|{users[0].first_name}], "
+
+
 def register_handlers(bot: Bot) -> None:
     @bot.on.message()
     async def on_message(message: Message) -> None:
@@ -72,4 +84,5 @@ def register_handlers(bot: Bot) -> None:
             return
 
         _last_reply_at[message.peer_id] = time.monotonic()
-        await message.reply(reply_text)
+        tag = await _mention_tag(bot, message.from_id)
+        await message.reply(f"{tag}{reply_text}")

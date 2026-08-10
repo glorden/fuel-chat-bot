@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from config import FRESH_MINUTES, STALE_MINUTES
 from pipeline.facts import StationFact
 from pipeline.resolve_station import get_station_name
-from templates import render_station_answer, render_unknown_station
+from templates import render_station_answer
 
 
 def _tier_for_age(age_minutes: float) -> str:
@@ -56,8 +56,13 @@ def _latest_facts(conn: sqlite3.Connection, station_id: str, grades: list[str] |
     return facts
 
 
-def answer_question(conn: sqlite3.Connection, *, station_id: str | None, grades: list[str]) -> str:
+def answer_question(conn: sqlite3.Connection, *, station_id: str | None, grades: list[str]) -> str | None:
+    """None означает "нечего ответить" — станция не распознана или по ней
+    вообще нет отчётов. В этом случае бот молчит, а не пишет в чат "не понял"
+    или "нет данных"."""
     if station_id is None:
-        return render_unknown_station()
+        return None
     facts = _latest_facts(conn, station_id, grades or None)
+    if not facts:
+        return None
     return render_station_answer(get_station_name(station_id), facts)

@@ -11,7 +11,7 @@ def render_station_answer(station_name: str, facts: list[StationFact]) -> str:
     if not facts:
         return f"По «{station_name}» пока нет данных в чате — никто не сообщал."
 
-    lines = [f"По «{station_name}»:"]
+    lines = [f"информация по {station_name}."]
     for fact in sorted(facts, key=lambda f: f.grade):
         lines.append(_render_fact_line(fact))
     return "\n".join(lines)
@@ -35,7 +35,3 @@ def _format_age(age_minutes: float) -> str:
     if hours < 24:
         return f"{f'{hours:.1f}'.rstrip('0').rstrip('.')} ч"
     return f"{int(hours / 24)} дн"
-
-
-def render_unknown_station() -> str:
-    return "Не понял, о какой именно АЗС речь — уточните адрес или бренд."

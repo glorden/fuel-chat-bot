@@ -25,16 +25,16 @@ def _insert_report(
 
 
 def test_answer_question_unknown_station():
+    # Станция не распознана — бот молчит (None), не пишет "не понял" в чат.
     conn = get_connection(":memory:")
-    assert answer_question(conn, station_id=None, grades=["95"]) == (
-        "Не понял, о какой именно АЗС речь — уточните адрес или бренд."
-    )
+    assert answer_question(conn, station_id=None, grades=["95"]) is None
 
 
 def test_answer_question_no_data_for_station():
+    # Станция известна, но по ней ещё нет отчётов — бот молчит (None),
+    # а не пишет "нет данных" в чат.
     conn = get_connection(":memory:")
-    text = answer_question(conn, station_id="tatneft_silikatny", grades=["95"])
-    assert "нет данных" in text
+    assert answer_question(conn, station_id="tatneft_silikatny", grades=["95"]) is None
 
 
 def test_answer_question_fresh_fact_has_no_staleness_caveat():
