@@ -6,10 +6,7 @@ from vkbottle.bot import Bot, Message
 from config import AUTO_REPLY_ON_QUESTION, GROUP_ID, MIN_REPLY_GAP_SECONDS
 from db import repo
 from db.schema import get_connection
-from pipeline.extract import extract
 from pipeline.pipeline import process_message
-from pipeline.qa import answer_question
-from pipeline.resolve_station import resolve_station
 
 log = logging.getLogger("vk_bot")
 
@@ -22,18 +19,19 @@ def _can_reply(peer_id: int) -> bool:
     return (time.monotonic() - last) >= MIN_REPLY_GAP_SECONDS
 
 
-def _answer_for_parent_message(message: Message) -> str | None:
-    """Тегнули бота реплаем на чужой вопрос, без своего текста — частый способ
-    адресовать существующий вопрос боту. В БД это не пишем (не новый отчёт,
-    просто ответ на то, что уже сказал другой человек), только отвечаем."""
-    if message.reply_message is None:
-        return None
-    parent_text = (message.reply_message.text or "").strip()
-    parent_result = extract(parent_text)
-    if parent_result.message_type != "question":
-        return None
-    station_id = resolve_station(parent_text)
-    return answer_question(_conn, station_id=station_id, grades=parent_result.question_grades)
+def _quoted_context_text(message: Message) -> str:
+    """Текст из fwd_messages и reply_message (один уровень, без рекурсии в
+    их собственные reply/fwd) — контекст для анализа текущего сообщения."""
+    parts = []
+    for fwd in message.fwd_messages or []:
+        t = (fwd.text or "").strip()
+        if t:
+            parts.append(t)
+    if message.reply_message is not None:
+        t = (message.reply_message.text or "").strip()
+        if t:
+            parts.append(t)
+    return "\n".join(parts)
 
 
 async def _mention_tag(bot: Bot, user_id: int) -> str:
@@ -58,9 +56,13 @@ def register_handlers(bot: Bot) -> None:
         repo.mark_processed(_conn, message.peer_id, message.conversation_message_id)
 
         own_text = (message.text or "").strip()
+        quoted_text = _quoted_context_text(message)
+        combined_text = f"{quoted_text}\n{own_text}".strip() if quoted_text else own_text
+
         outcome = process_message(
             _conn,
-            text=own_text,
+            text=combined_text,
+            own_text=own_text,
             peer_id=message.peer_id,
             conversation_message_id=message.conversation_message_id,
             author_id=message.from_id,
@@ -71,8 +73,6 @@ def register_handlers(bot: Bot) -> None:
         )
 
         reply_text = outcome.reply_text if outcome.label == "question" else None
-        if reply_text is None and not own_text and message.is_mentioned:
-            reply_text = _answer_for_parent_message(message)
 
         if not reply_text:
             return

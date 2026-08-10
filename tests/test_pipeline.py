@@ -1,5 +1,6 @@
 import sqlite3
 
+import pipeline.pipeline as pipeline_module
 from db.schema import get_connection
 from pipeline.extract import ReportItem, extract
 from pipeline.pipeline import process_message
@@ -249,3 +250,77 @@ def test_process_message_end_to_end_against_temp_db():
         peer_id=2000000001, conversation_message_id=4, author_id=111,
     )
     assert outcome.label == "off_topic"
+
+
+def test_process_message_writes_report_from_pure_quote_when_own_text_empty(monkeypatch):
+    # Форвард/реплай без своего комментария — весь факт из цитаты, own_text
+    # пуст. Это ровно тот случай, который фича должна закрыть: пишем как
+    # обычно, raw_text = обогащённый текст. LLM_ENABLED форсированно выключен
+    # (в .env этой машины он включён) — гвард проверяем детерминированно,
+    # через rule-based, а не через живой LLM-ответ.
+    monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
+    conn: sqlite3.Connection = get_connection(":memory:")
+    outcome = process_message(
+        conn, text="РН лесной, 95 есть на 4,5 колонке. Очередь.", own_text="",
+        peer_id=2000000001, conversation_message_id=1, author_id=111,
+    )
+    assert outcome.label == "report:rosneft_lesnoy_79"
+    row = conn.execute("SELECT raw_text FROM fuel_report").fetchone()
+    assert row[0] == "РН лесной, 95 есть на 4,5 колонке. Очередь."
+
+
+def test_process_message_suppresses_report_when_own_text_has_no_signal(monkeypatch):
+    # Реплай с текстом, который сам по себе ничего не сообщает ("спасибо") —
+    # факт всплыл только из подклеенной цитаты. Не пишем: иначе случайный
+    # реплай искусственно освежил бы старый факт под новым timestamp.
+    monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
+    conn: sqlite3.Connection = get_connection(":memory:")
+    outcome = process_message(
+        conn,
+        text="РН лесной, 95 есть на 4,5 колонке. Очередь.\nСпасибо",
+        own_text="Спасибо",
+        peer_id=2000000001, conversation_message_id=1, author_id=111,
+    )
+    assert outcome.label == "report_suppressed_quote_only"
+    assert conn.execute("SELECT COUNT(*) FROM fuel_report").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM unresolved_mention").fetchone()[0] == 0
+
+
+def test_process_message_writes_report_when_own_text_has_its_own_signal(monkeypatch):
+    # Свой текст сам по себе уже report (называет марку) — пишем как обычно,
+    # даже если он пришёл вместе с цитатой. Цитата намеренно без брендов и
+    # марок (просто заполнитель), чтобы не создавать случайную неоднозначность
+    # со станцией из own_text.
+    monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
+    conn: sqlite3.Connection = get_connection(":memory:")
+    outcome = process_message(
+        conn,
+        text="кто-то писал в чат\nРН лесной, 95 есть на 4,5 колонке. Очередь.",
+        own_text="РН лесной, 95 есть на 4,5 колонке. Очередь.",
+        peer_id=2000000001, conversation_message_id=1, author_id=111,
+    )
+    assert outcome.label == "report:rosneft_lesnoy_79"
+    row = conn.execute("SELECT fuel_grade, status, queue_note FROM fuel_report").fetchone()
+    assert row == ("95", "available", "есть очередь")
+
+
+def test_process_message_question_resolves_station_from_quoted_report(monkeypatch):
+    # Реплай-вопрос без станции в своём тексте — станция и марка резолвятся
+    # из подклеенной цитаты; вопрос никогда не пишется в БД, гвард тут ни
+    # при чём (сработал бы только для message_type == "report").
+    monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
+    conn: sqlite3.Connection = get_connection(":memory:")
+    _seed = process_message(
+        conn, text="95 нет на Лукойле Вилга", peer_id=2000000001, conversation_message_id=1, author_id=111,
+    )
+    assert _seed.label.startswith("report:")
+
+    outcome = process_message(
+        conn,
+        text="95 нет на Лукойле Вилга\nа очередь есть?",
+        own_text="а очередь есть?",
+        peer_id=2000000001, conversation_message_id=2, author_id=222,
+    )
+    assert outcome.label == "question"
+    assert outcome.reply_text is not None
+    assert "95" in outcome.reply_text

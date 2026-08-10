@@ -46,8 +46,14 @@ def process_message(
     peer_id: int,
     conversation_message_id: int,
     author_id: int,
+    own_text: str | None = None,
 ) -> PipelineOutcome:
-    """Run one message through the pipeline."""
+    """Run one message through the pipeline. `text` may be enriched with
+    quoted reply/forward context (see vk_handlers.py); `own_text` — what the
+    author actually typed themselves, defaults to `text` when not given."""
+    if own_text is None:
+        own_text = text
+
     if not is_on_topic(text):
         return PipelineOutcome("off_topic")
 
@@ -59,6 +65,13 @@ def process_message(
     if result.message_type == "question":
         reply_text = answer_question(conn, station_id=station_id, grades=result.question_grades)
         return PipelineOutcome("question", reply_text=reply_text)
+
+    if text != own_text and own_text and extract(own_text).message_type != "report":
+        # Репорт всплыл только благодаря подклеенной цитате (форвард/реплай),
+        # а свой текст автора сам по себе ничего не сообщает — не пишем в
+        # БД, иначе случайное "спасибо"-реплаем искусственно освежит старый
+        # факт под новым timestamp.
+        return PipelineOutcome("report_suppressed_quote_only")
 
     if station_id is None:
         repo.insert_unresolved_mention(
