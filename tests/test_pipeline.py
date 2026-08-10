@@ -6,6 +6,7 @@ from pipeline.pipeline import process_message
 from pipeline.prefilter import is_on_topic
 from pipeline.resolve_station import resolve_station
 from tests.fixtures import (
+    GENERIC_AVAILABILITY_NOT_CAPTURED_BY_RULES,
     OFF_TOPIC_OR_NO_SIGNAL,
     QUESTIONS,
     REPORTS,
@@ -33,6 +34,9 @@ def test_questions_classified_and_grades_extracted():
         "Будет тех перерыв на РН на Лососинском с 21-22 ч?": [],
         "Здравствуйте всем! Подскажите есть ли на Роснефть на Лесном, 79 (возле поворота на объездную) 92-й?": ["92"],
         "Есть еще 95 на РН на Лососинском и нет ли тех перерыва?": ["95"],
+        "Татнефть на объездной, есть 92-95?": ["92", "95"],
+        "Подскажите пожалуйста Лукойл на Заводской есть 92?": ["92"],
+        "Роснефть у Республиканской больницы есть 95? Какие колонки?": ["95"],
     }
     for text, grades in expected_grades.items():
         result = extract(text)
@@ -85,6 +89,24 @@ def test_reports_classified_with_grade_status_and_queue():
     assert grades_status == {"95": "available", "92": "available"}
     assert result.queue_note == "без очереди"
 
+    # Очередь в машинах, а не в минутах — отдельный формат, не "мин".
+    result = extract("Татнефть есть 95й\nВозле силикатного кольца\nОчередь 6 машин")
+    assert result.reports == [ReportItem("95", "available")]
+    assert result.queue_note == "~6 машин"
+
+    result = extract("Лесной 79 Роснефть - 92, 95, дт. Очередь - 3-4 машины на Лесном перед заездом.")
+    grades_status = {r.grade: r.status for r in result.reports}
+    assert grades_status == {"92": "available", "95": "available", "ДТ": "available"}
+    assert result.queue_note == "~3-4 машин"
+
+
+def test_generic_availability_without_explicit_grade_is_a_known_gap():
+    # Документируем текущее (неполное) поведение как маркер регрессии: если
+    # это когда-нибудь починим на rule-based стороне, тест подскажет об этом.
+    # LLM-путь (llm/client.py) такие сообщения уже разбирает правильно.
+    for text in GENERIC_AVAILABILITY_NOT_CAPTURED_BY_RULES:
+        assert extract(text).message_type == "irrelevant", text
+
 
 def test_resolve_station_handles_typos_and_landmark_aliases():
     # Опечатка "лоссосинское" (реальная, из лога) всё равно резолвится.
@@ -93,6 +115,8 @@ def test_resolve_station_handles_typos_and_landmark_aliases():
     assert resolve_station("Добрый вечер. У РБ на РН 95 на каких колонках есть?") == "rosneft_lososinskoe"
     assert resolve_station("Лукойл на лососинском, 95 есть") == "lukoil_lososinskoe"
     assert resolve_station("РН на лыжной-95 на 1 и 2 колонке") == "rosneft_lyzhnaya"
+    # "Республиканская больница" полностью, не только сокращение "РБ".
+    assert resolve_station("Роснефть у Республиканской больницы есть 95?") == "rosneft_lososinskoe"
 
 
 def test_reports_with_unknown_station_stay_unresolved():
@@ -118,6 +142,17 @@ def test_resolve_station_distinguishes_different_brands_on_same_road():
     assert resolve_station("Опти Шуйское, 95 есть") == "opti_shuyskoe"
     # ТН на Шуйском шоссе — это другая точка, не Татнефть Ключевая.
     assert resolve_station("На ТН на Шуйском шоссе есть 95?") == "tatneft_shuyskoe"
+    # Татнефть на объездной — четвёртая точка бренда, есть свой алиас
+    # "объездн", уже занятый rosneft_lesnoy_79 (другой бренд — не конфликт).
+    assert resolve_station("Татнефть на объездной, есть 92-95?") == "tatneft_obiezdnaya"
+    assert resolve_station("Подскажите пожалуйста Лукойл на Заводской есть 92?") == "lukoil_zavodskaya"
+
+
+def test_opti_has_two_stations_bare_brand_no_longer_resolves():
+    # С добавлением второй точки "опти" без локации однозначно не резолвится.
+    assert resolve_station("Опти Шуйское, 95 есть") == "opti_shuyskoe"
+    assert resolve_station("Опти Казарменская  92 ДТ ни кого.") == "opti_kazarmenskaya"
+    assert resolve_station("опти на суоярвском 92-й без очереди и ограничений") is None
 
 
 def test_resolve_station_does_not_guess_ambiguous_or_unknown_locations():

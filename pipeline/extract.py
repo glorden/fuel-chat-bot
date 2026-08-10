@@ -14,6 +14,7 @@ _NO_QUEUE = re.compile(r"(?i)очеред\w*\s+нет|нет\s+очеред\w*|�
 _QUEUE_MINUTES = re.compile(
     r"(?i)(?:заправ\w*|отсто\w*|прожда\w*|ожида\w*|очеред\w*)\D{0,15}?(\d{1,3})\s*мин"
 )
+_QUEUE_CARS = re.compile(r"(?i)(\d{1,3}(?:\s*[-–]\s*\d{1,3})?)\s*машин\w*")
 _QUEUE_PRESENT = re.compile(r"(?i)\bочеред\w*")
 
 
@@ -45,6 +46,9 @@ def _extract_queue_note(text: str) -> str | None:
     m = _QUEUE_MINUTES.search(text)
     if m:
         return f"~{m.group(1)} мин"
+    m = _QUEUE_CARS.search(text)
+    if m:
+        return f"~{m.group(1)} машин"
     if _QUEUE_PRESENT.search(text):
         return "есть очередь"
     return None
