@@ -7,6 +7,7 @@ from groq import Groq
 from config import GROQ_API_KEY, LLM_MODEL, LLM_TIMEOUT_SECONDS
 from llm.prompts import build_system_prompt
 from pipeline.extract import ExtractResult, ReportItem
+from pipeline.resolve_station import is_known_station
 
 log = logging.getLogger("vk_bot")
 
@@ -73,7 +74,7 @@ def _parse_arguments(raw: dict) -> LLMAnalysis | None:
         return None
 
     station_id = raw.get("station_id")
-    if not isinstance(station_id, str) or not station_id:
+    if not isinstance(station_id, str) or not station_id or not is_known_station(station_id):
         station_id = None
 
     queue_note = raw.get("queue_note")

@@ -1,3 +1,4 @@
+import logging
 import sqlite3
 from dataclasses import dataclass
 
@@ -7,6 +8,8 @@ from pipeline.extract import ExtractResult, extract
 from pipeline.prefilter import is_on_topic
 from pipeline.qa import answer_question
 from pipeline.resolve_station import resolve_station
+
+log = logging.getLogger("vk_bot")
 
 
 @dataclass
@@ -23,7 +26,13 @@ def _analyze(text: str) -> tuple[ExtractResult, str | None]:
 
         llm_result = llm_analyze(text)
         if llm_result is not None:
+            log.info(
+                "path=llm message_type=%s station_id=%s",
+                llm_result.extract_result.message_type,
+                llm_result.station_id,
+            )
             return llm_result.extract_result, llm_result.station_id
+        log.info("path=rule_based reason=llm_fallback")
 
     result = extract(text)
     station_id = resolve_station(text) if result.message_type != "irrelevant" else None

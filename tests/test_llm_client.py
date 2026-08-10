@@ -72,3 +72,20 @@ def test_parse_treats_empty_or_wrong_typed_station_id_as_none():
 
 def test_parse_rejects_missing_message_type():
     assert _parse_arguments({}) is None
+
+
+def test_parse_treats_unknown_station_id_as_none():
+    # Модель может "нафантазировать" station_id, которого нет в газетире —
+    # такой id не должен долетать дальше как реальный (KeyError в
+    # get_station_name / мусор в fuel_report), а должен трактоваться как
+    # нераспознанная станция, ровно как rule-based резолвер.
+    raw = {
+        "message_type": "question",
+        "station_id": "lukoil_nesuschestvuyuschaya",
+        "reports": [],
+        "question_grades": ["92"],
+        "queue_note": None,
+    }
+    result = _parse_arguments(raw)
+    assert result is not None
+    assert result.station_id is None

@@ -31,6 +31,10 @@ def get_station_name(station_id: str) -> str:
     return _STATIONS_BY_ID[station_id]["name"]
 
 
+def is_known_station(station_id: str) -> bool:
+    return station_id in _STATIONS_BY_ID
+
+
 def resolve_station(text: str) -> str | None:
     """Матчит станцию по бренду; если у бренда несколько точек — ещё и по локации.
 

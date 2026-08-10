@@ -7,6 +7,7 @@ from config import GROUP_ID, VK_TOKEN
 from vk_handlers import register_handlers
 
 sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("vk_bot")
 
