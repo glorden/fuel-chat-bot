@@ -2,7 +2,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from config import FRESH_MINUTES, STALE_MINUTES
-from pipeline.facts import StationFact
+from pipeline.facts import StationBreak, StationFact
 from pipeline.resolve_station import get_station_name
 from templates import render_station_answer
 
@@ -58,13 +58,32 @@ def _latest_facts(conn: sqlite3.Connection, station_id: str, grades: list[str] |
     return facts
 
 
+def _latest_break(conn: sqlite3.Connection, station_id: str) -> StationBreak | None:
+    """Последняя запись о перерыве по станции — без окна активности (по
+    прямому решению пользователя): показывается всегда, вместе с возрастом,
+    человек сам решает, актуально ли ещё."""
+    row = conn.execute(
+        "SELECT kind, until, duration_note, reported_at FROM station_break "
+        "WHERE station_id = ? ORDER BY reported_at DESC LIMIT 1",
+        (station_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    kind, until_raw, duration_note, reported_at = row
+    reported_dt = datetime.fromisoformat(reported_at)
+    age_minutes = (datetime.now(timezone.utc) - reported_dt).total_seconds() / 60
+    until_dt = datetime.fromisoformat(until_raw) if until_raw else None
+    return StationBreak(kind=kind, until=until_dt, duration_note=duration_note, reported_minutes_ago=age_minutes)
+
+
 def answer_question(conn: sqlite3.Connection, *, station_id: str | None, grades: list[str]) -> str | None:
-    """None означает "нечего ответить" — станция не распознана или по ней
-    вообще нет отчётов. В этом случае бот молчит, а не пишет в чат "не понял"
-    или "нет данных"."""
+    """None означает "нечего ответить" — станция не распознана, или по ней
+    нет ни отчётов по маркам, ни перерывов. В этом случае бот молчит, а не
+    пишет в чат "не понял" или "нет данных"."""
     if station_id is None:
         return None
     facts = _latest_facts(conn, station_id, grades or None)
-    if not facts:
+    break_info = _latest_break(conn, station_id)
+    if not facts and break_info is None:
         return None
-    return render_station_answer(get_station_name(station_id), facts)
+    return render_station_answer(get_station_name(station_id), facts, break_info)

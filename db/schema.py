@@ -32,6 +32,19 @@ CREATE TABLE IF NOT EXISTS unresolved_mention (
     seen_at TEXT NOT NULL,
     raw_text TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS station_break (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    station_id TEXT NOT NULL,
+    kind TEXT,
+    until TEXT,
+    duration_note TEXT,
+    peer_id INTEGER NOT NULL,
+    conversation_message_id INTEGER NOT NULL,
+    author_id INTEGER NOT NULL,
+    reported_at TEXT NOT NULL,
+    raw_text TEXT NOT NULL
+);
 """
 
 

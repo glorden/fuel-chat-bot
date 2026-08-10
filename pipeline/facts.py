@@ -13,3 +13,11 @@ class StationFact:
     age_minutes: float
     tier: str  # "fresh" | "stale" | "very_stale"
     conflicting: bool
+
+
+@dataclass
+class StationBreak:
+    kind: str | None  # "слив" | "отстой" | "перерыв" | None
+    until: datetime | None
+    duration_note: str | None
+    reported_minutes_ago: float

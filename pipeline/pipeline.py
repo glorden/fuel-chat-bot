@@ -99,4 +99,16 @@ def process_message(
             author_id=author_id,
             raw_text=text,
         )
+
+    if result.break_info is not None:
+        repo.insert_station_break(
+            conn,
+            station_id=station_id,
+            break_info=result.break_info,
+            peer_id=peer_id,
+            conversation_message_id=conversation_message_id,
+            author_id=author_id,
+            raw_text=text,
+        )
+
     return PipelineOutcome(f"report:{station_id}")

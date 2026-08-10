@@ -26,6 +26,25 @@ def _insert_report(
     conn.commit()
 
 
+def _insert_break(
+    conn: sqlite3.Connection,
+    *,
+    station_id: str,
+    kind: str | None,
+    until: str | None,
+    duration_note: str | None,
+    minutes_ago: float,
+) -> None:
+    reported_at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+    conn.execute(
+        "INSERT INTO station_break "
+        "(station_id, kind, until, duration_note, peer_id, conversation_message_id, "
+        " author_id, reported_at, raw_text) VALUES (?, ?, ?, ?, 1, 1, 1, ?, 'test')",
+        (station_id, kind, until, duration_note, reported_at),
+    )
+    conn.commit()
+
+
 def test_answer_question_unknown_station():
     # Станция не распознана — бот молчит (None), не пишет "не понял" в чат.
     conn = get_connection(":memory:")
@@ -106,3 +125,55 @@ def test_answer_question_differing_queue_notes_shown_per_group():
     text = answer_question(conn, station_id="lukoil_vilga", grades=["92", "95"])
     assert "92 - Есть, без очереди" in text
     assert "95 - Есть, ~15 мин" in text
+
+
+def test_answer_question_shows_break_with_no_fuel_facts_at_all():
+    # Раньше "станция известна, но нет отчётов по маркам" всегда означало
+    # молчание — теперь перерыв без единого отчёта по маркам тоже повод
+    # содержательно ответить.
+    conn = get_connection(":memory:")
+    _insert_break(conn, station_id="lukoil_vilga", kind="слив", until=None, duration_note="минут 40", minutes_ago=10)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=[])
+    assert text is not None
+    assert "слив бензовоза" in text
+    assert "минут 40" in text
+
+
+def test_answer_question_shows_break_alongside_fuel_facts():
+    # По решению пользователя — перерыв и факты по маркам показываются
+    # вместе, одно не подменяет другое.
+    conn = get_connection(":memory:")
+    _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue_note=None, minutes_ago=5)
+    _insert_break(conn, station_id="lukoil_vilga", kind="перерыв", until=None, duration_note=None, minutes_ago=5)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=["92"])
+    assert "технический перерыв" in text
+    assert "92 - Есть" in text
+
+
+def test_answer_question_break_shown_regardless_of_age_no_active_window():
+    # Прямое следствие решения пользователя "без окна активности" — даже
+    # 10-часовой давности перерыв, о завершении которого никто не написал,
+    # всё ещё упоминается (с возрастом — человек сам решает, актуально ли).
+    conn = get_connection(":memory:")
+    _insert_break(conn, station_id="lukoil_vilga", kind="слив", until=None, duration_note=None, minutes_ago=600)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=[])
+    assert text is not None
+    assert "слив бензовоза" in text
+    assert "10 ч" in text
+
+
+def test_answer_question_break_with_until_shows_clock_time_not_age():
+    conn = get_connection(":memory:")
+    until = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+    _insert_break(conn, station_id="gazprom", kind="перерыв", until=until, duration_note=None, minutes_ago=5)
+    text = answer_question(conn, station_id="gazprom", grades=[])
+    assert "ожидается до" in text
+
+
+def test_answer_question_uses_latest_break_not_older_one():
+    conn = get_connection(":memory:")
+    _insert_break(conn, station_id="lukoil_vilga", kind="слив", until=None, duration_note="минут 20", minutes_ago=60)
+    _insert_break(conn, station_id="lukoil_vilga", kind="отстой", until=None, duration_note="минут 40", minutes_ago=5)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=[])
+    assert "отстой топлива" in text
+    assert "слив бензовоза" not in text

@@ -1,12 +1,15 @@
 import sqlite3
+from datetime import datetime, timezone
 
 import pipeline.pipeline as pipeline_module
 from db.schema import get_connection
-from pipeline.extract import ReportItem, extract
+from pipeline.extract import ReportItem, extract, resolve_clock_time_to_iso
+from pipeline.facts import MOSCOW_TZ
 from pipeline.pipeline import process_message
 from pipeline.prefilter import is_on_topic
 from pipeline.resolve_station import resolve_station
 from tests.fixtures import (
+    BREAK_REPORTS,
     GENERIC_AVAILABILITY_NOT_CAPTURED_BY_RULES,
     OFF_TOPIC_OR_NO_SIGNAL,
     QUESTIONS,
@@ -53,6 +56,10 @@ def test_questions_classified_and_grades_extracted():
         result = extract(text)
         assert result.message_type == "question", text
         assert result.question_grades == grades, text
+        # Вопросы (даже про перерыв) никогда не несут break_info — ответ
+        # про активный перерыв всегда строится из БД в qa.py, не из текста
+        # вопроса.
+        assert result.break_info is None, text
 
 
 def test_reports_classified_with_grade_status_and_queue():
@@ -117,6 +124,66 @@ def test_generic_availability_without_explicit_grade_is_a_known_gap():
     # LLM-путь (llm/client.py) такие сообщения уже разбирает правильно.
     for text in GENERIC_AVAILABILITY_NOT_CAPTURED_BY_RULES:
         assert extract(text).message_type == "irrelevant", text
+
+
+def test_break_report_classified_with_kind_and_no_time_info():
+    # Раньше чистый перерыв без марки топлива и без "?" проваливался в
+    # irrelevant. Теперь это report с пустым reports и заполненным break_info.
+    result = extract(BREAK_REPORTS[0])  # "Слив бензовоза на Лукойле Вилга, минут 40"
+    assert result.message_type == "report"
+    assert result.reports == []
+    assert result.break_info.kind == "слив"
+    assert result.break_info.until is None
+    assert result.break_info.duration_note == "минут 40"
+
+
+def test_break_report_extracts_explicit_until_time():
+    result = extract(BREAK_REPORTS[1])  # "Тех перерыв на Газпроме до 22:00"
+    assert result.break_info.kind == "перерыв"
+    assert result.break_info.duration_note is None
+    until_dt = datetime.fromisoformat(result.break_info.until)
+    assert until_dt.astimezone(MOSCOW_TZ).strftime("%H:%M") == "22:00"
+
+
+def test_break_report_extracts_time_range_as_until():
+    result = extract(BREAK_REPORTS[2])  # "Отстой топлива на Опти Шуйское с 21-22 ч"
+    assert result.break_info.kind == "отстой"
+    until_dt = datetime.fromisoformat(result.break_info.until)
+    assert until_dt.astimezone(MOSCOW_TZ).strftime("%H:%M") == "22:00"
+
+
+def test_break_combines_with_grade_report_in_same_message():
+    result = extract(BREAK_REPORTS[3])  # "...Татнефть Силикатный, есть 92, нет 95"
+    assert result.break_info.kind == "слив"
+    grades_status = {r.grade: r.status for r in result.reports}
+    assert grades_status == {"92": "available", "95": "unavailable"}
+
+
+def test_pure_break_report_resolves_station():
+    # Раньше resolve_station для message_type == "irrelevant" вообще не
+    # вызывался — чистый перерыв терял станцию даже когда она однозначна.
+    for text in BREAK_REPORTS:
+        assert resolve_station(text) is not None, text
+    assert resolve_station(BREAK_REPORTS[0]) == "lukoil_vilga"
+    assert resolve_station(BREAK_REPORTS[1]) == "gazprom"
+    assert resolve_station(BREAK_REPORTS[2]) == "opti_shuyskoe"
+    assert resolve_station(BREAK_REPORTS[3]) == "tatneft_silikatny"
+
+
+def test_grade_range_is_not_mistaken_for_a_time_range():
+    # "92-95" без единиц времени не должен матчиться как диапазон часов —
+    # без явного требования суффикса "ч"/"час" это дало бы hour=92 и падение
+    # в resolve_clock_time_to_iso (или тихо неверное время без защиты).
+    result = extract("Слив бензовоза, есть 92-95")
+    assert result.break_info.kind == "слив"
+    assert result.break_info.until is None
+
+
+def test_resolve_clock_time_to_iso_rejects_out_of_range_values():
+    now = datetime.now(timezone.utc)
+    assert resolve_clock_time_to_iso(25, 0, now=now) is None
+    assert resolve_clock_time_to_iso(10, 75, now=now) is None
+    assert resolve_clock_time_to_iso(23, 59, now=now) is not None
 
 
 def test_resolve_station_handles_typos_and_landmark_aliases():
@@ -324,3 +391,29 @@ def test_process_message_question_resolves_station_from_quoted_report(monkeypatc
     assert outcome.label == "question"
     assert outcome.reply_text is not None
     assert "95" in outcome.reply_text
+
+
+def test_process_message_writes_pure_break_report_to_station_break(monkeypatch):
+    monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
+    conn: sqlite3.Connection = get_connection(":memory:")
+    outcome = process_message(
+        conn, text="Слив бензовоза на Лукойле Вилга, минут 40",
+        peer_id=2000000001, conversation_message_id=1, author_id=111,
+    )
+    assert outcome.label == "report:lukoil_vilga"
+    # Чистый перерыв без марки — fuel_report пуст, station_break заполнен.
+    assert conn.execute("SELECT COUNT(*) FROM fuel_report").fetchone()[0] == 0
+    row = conn.execute("SELECT station_id, kind, until, duration_note FROM station_break").fetchone()
+    assert row == ("lukoil_vilga", "слив", None, "минут 40")
+
+
+def test_process_message_writes_break_and_report_together(monkeypatch):
+    monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
+    conn: sqlite3.Connection = get_connection(":memory:")
+    outcome = process_message(
+        conn, text="Слив бензовоза на Татнефть Силикатный, есть 92, нет 95",
+        peer_id=2000000001, conversation_message_id=1, author_id=111,
+    )
+    assert outcome.label == "report:tatneft_silikatny"
+    assert conn.execute("SELECT COUNT(*) FROM fuel_report").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM station_break").fetchone()[0] == 1
