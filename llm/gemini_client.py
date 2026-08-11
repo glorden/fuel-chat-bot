@@ -58,7 +58,9 @@ _client = (
 )
 
 
-def raw_analyze(text: str, *, previous_message: str | None = None) -> dict | None:
+def raw_analyze(
+    text: str, *, previous_message: str | None = None, quoted_context: str | None = None
+) -> dict | None:
     """Разбор сообщения через Gemini. Возвращает сырой dict аргументов
     вызванной функции, либо None при любом сбое/неожиданном ответе —
     сигнал диспетчеру (llm/client.py) откатиться на rule-based."""
@@ -67,7 +69,7 @@ def raw_analyze(text: str, *, previous_message: str | None = None) -> dict | Non
     try:
         response = _client.models.generate_content(
             model=GEMINI_MODEL,
-            contents=build_user_content(text, previous_message=previous_message),
+            contents=build_user_content(text, previous_message=previous_message, quoted_context=quoted_context),
             config=_GENERATE_CONFIG,
         )
         calls = response.function_calls

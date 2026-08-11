@@ -18,15 +18,28 @@ class PipelineOutcome:
     reply_text: str | None = None
 
 
-def _analyze(text: str, *, previous_message: str | None = None) -> tuple[ExtractResult, str | None]:
+def _analyze(
+    text: str,
+    *,
+    own_text: str,
+    quoted_context: str | None = None,
+    previous_message: str | None = None,
+) -> tuple[ExtractResult, str | None]:
     """Классификация+извлечение+резолв станции. Пробует LLM (если включён),
     при любом сбое или если LLM выключен — текущий rule-based путь.
-    `previous_message` идёт только в LLM-ветку — rule-based про него не
-    знает и не должен, у него нет механизма его использовать."""
+
+    `text` — уже склеенный (цитата+свой текст) блок, его получает rule-based:
+    простой конкатенации достаточно, regex не путает "контекст" с "текущим
+    сообщением". LLM-ветка получает `own_text` отдельно от `quoted_context`/
+    `previous_message`, каждый со своей меткой (см. llm/prompts.py::
+    build_user_content) — плоская склейка без разметки заставляла модель
+    иногда путать "вопрос где-то в тексте" с "текущее сообщение — вопрос"
+    (живая находка 2026-08-11: короткие подтверждения вроде "Да"/"Есть."
+    в ответ на процитированный вопрос повторно определялись как question)."""
     if LLM_ENABLED:
         from llm.client import analyze as llm_analyze
 
-        llm_result = llm_analyze(text, previous_message=previous_message)
+        llm_result = llm_analyze(own_text, previous_message=previous_message, quoted_context=quoted_context)
         if llm_result is not None:
             log.info(
                 "path=llm message_type=%s station_id=%s",
@@ -49,11 +62,14 @@ def process_message(
     conversation_message_id: int,
     author_id: int,
     own_text: str | None = None,
+    quoted_context: str | None = None,
     previous_message: str | None = None,
 ) -> PipelineOutcome:
     """Run one message through the pipeline. `text` may be enriched with
     quoted reply/forward context (see vk_handlers.py); `own_text` — what the
     author actually typed themselves, defaults to `text` when not given.
+    `quoted_context` — the same reply/forward text, passed separately so the
+    LLM branch can label it instead of seeing it baked into `text` unmarked.
     `previous_message` — the same author's previous on-topic message, used
     only by the LLM path to resolve implicit references (see _analyze)."""
     if own_text is None:
@@ -62,7 +78,9 @@ def process_message(
     if not is_on_topic(text):
         return PipelineOutcome("off_topic")
 
-    result, station_id = _analyze(text, previous_message=previous_message)
+    result, station_id = _analyze(
+        text, own_text=own_text, quoted_context=quoted_context, previous_message=previous_message
+    )
 
     if result.message_type == "irrelevant":
         return PipelineOutcome("irrelevant")

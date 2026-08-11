@@ -22,7 +22,9 @@ _SYSTEM_PROMPT = build_system_prompt()
 _client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 
-def raw_analyze(text: str, *, previous_message: str | None = None) -> dict | None:
+def raw_analyze(
+    text: str, *, previous_message: str | None = None, quoted_context: str | None = None
+) -> dict | None:
     """Разбор сообщения через Groq. Возвращает сырой dict аргументов
     вызванной функции, либо None при любом сбое/неожиданном ответе —
     сигнал диспетчеру (llm/client.py) откатиться на rule-based."""
@@ -34,7 +36,12 @@ def raw_analyze(text: str, *, previous_message: str | None = None) -> dict | Non
             model=LLM_MODEL,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": build_user_content(text, previous_message=previous_message)},
+                {
+                    "role": "user",
+                    "content": build_user_content(
+                        text, previous_message=previous_message, quoted_context=quoted_context
+                    ),
+                },
             ],
             tools=[_TOOL_SCHEMA],
             tool_choice={"type": "function", "function": {"name": TOOL_NAME}},

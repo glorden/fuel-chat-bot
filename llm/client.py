@@ -6,18 +6,21 @@ from llm.schema import LLMAnalysis, _parse_arguments  # noqa: F401 — реэк�
 log = logging.getLogger("vk_bot")
 
 
-def analyze(text: str, *, previous_message: str | None = None) -> LLMAnalysis | None:
+def analyze(
+    text: str, *, previous_message: str | None = None, quoted_context: str | None = None
+) -> LLMAnalysis | None:
     """Единственная точка входа для pipeline.py. Диспетчер по
     config.LLM_PROVIDER; любой сбой/невалидный ответ любого провайдера —
-    None, сигнал пайплайну откатиться на rule-based. `previous_message` —
-    предыдущее сообщение того же автора, только контекст для разрешения
-    неявных ссылок (см. llm/prompts.py); rule-based путь его не получает."""
+    None, сигнал пайплайну откатиться на rule-based. `previous_message`/
+    `quoted_context` — контекст для разрешения неявных ссылок (см.
+    llm/prompts.py::build_user_content, каждый со своей меткой); rule-based
+    путь их не получает."""
     if LLM_PROVIDER == "gemini":
         from llm.gemini_client import raw_analyze
     else:
         from llm.groq_client import raw_analyze
 
-    raw = raw_analyze(text, previous_message=previous_message)
+    raw = raw_analyze(text, previous_message=previous_message, quoted_context=quoted_context)
     if raw is None:
         return None
 

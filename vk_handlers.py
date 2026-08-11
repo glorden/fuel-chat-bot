@@ -86,6 +86,7 @@ def register_handlers(bot: Bot) -> None:
             _conn,
             text=combined_text,
             own_text=own_text,
+            quoted_context=quoted_text or None,
             previous_message=previous_message,
             peer_id=message.peer_id,
             conversation_message_id=message.conversation_message_id,

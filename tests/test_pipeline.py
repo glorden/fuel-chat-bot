@@ -283,7 +283,12 @@ def test_off_topic_and_no_signal_messages_produce_no_structured_data():
             assert extract(text).message_type == "irrelevant", text
 
 
-def test_process_message_end_to_end_against_temp_db():
+def test_process_message_end_to_end_against_temp_db(monkeypatch):
+    # Форсируем rule-based: .env этой машины держит LLM_ENABLED=true, и без
+    # этого тест неявно бил в живой Gemini — иногда с другой (тоже верной)
+    # формулировкой queue_note, что делало тест ложно нестабильным. Известно
+    # с Этапа 9, откладывалось; чиним по ходу другой правки в этом же файле.
+    monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
     conn: sqlite3.Connection = get_connection(":memory:")
 
     outcome = process_message(
