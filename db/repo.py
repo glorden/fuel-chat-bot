@@ -1,7 +1,7 @@
 import sqlite3
 from datetime import datetime, timezone
 
-from pipeline.extract import BreakInfo, ReportItem
+from pipeline.extract import BreakInfo, LimitInfo, ReportItem
 
 
 def already_processed(conn: sqlite3.Connection, peer_id: int, conversation_message_id: int) -> bool:
@@ -70,6 +70,34 @@ def insert_station_break(
             break_info.kind,
             break_info.until,
             break_info.duration_note,
+            peer_id,
+            conversation_message_id,
+            author_id,
+            datetime.now(timezone.utc).isoformat(),
+            raw_text,
+        ),
+    )
+    conn.commit()
+
+
+def insert_fuel_limit(
+    conn: sqlite3.Connection,
+    *,
+    station_id: str,
+    limit_info: LimitInfo,
+    peer_id: int,
+    conversation_message_id: int,
+    author_id: int,
+    raw_text: str,
+) -> None:
+    conn.execute(
+        "INSERT INTO fuel_limit "
+        "(station_id, status, liters, peer_id, conversation_message_id, "
+        " author_id, reported_at, raw_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            station_id,
+            limit_info.status,
+            limit_info.liters,
             peer_id,
             conversation_message_id,
             author_id,

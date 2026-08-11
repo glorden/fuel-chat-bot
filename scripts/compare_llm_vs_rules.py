@@ -1,7 +1,14 @@
 from llm.client import analyze
-from pipeline.extract import BreakInfo, extract
+from pipeline.extract import BreakInfo, LimitInfo, extract
 from pipeline.resolve_station import resolve_station
-from tests.fixtures import BREAK_REPORTS, OFF_TOPIC_OR_NO_SIGNAL, QUESTIONS, REPORTS, REPORTS_WITH_UNKNOWN_STATION
+from tests.fixtures import (
+    BREAK_REPORTS,
+    LIMIT_REPORTS,
+    OFF_TOPIC_OR_NO_SIGNAL,
+    QUESTIONS,
+    REPORTS,
+    REPORTS_WITH_UNKNOWN_STATION,
+)
 
 
 def _break_repr(break_info: BreakInfo | None) -> str:
@@ -10,13 +17,20 @@ def _break_repr(break_info: BreakInfo | None) -> str:
     return f"(kind={break_info.kind!r} until={break_info.until!r} duration={break_info.duration_note!r})"
 
 
+def _limit_repr(limit_info: LimitInfo | None) -> str:
+    if limit_info is None:
+        return "None"
+    return f"(status={limit_info.status!r} liters={limit_info.liters!r})"
+
+
 def _rule_based(text: str) -> str:
     result = extract(text)
     station_id = resolve_station(text) if result.message_type != "irrelevant" else None
     reports = [(r.grade, r.status) for r in result.reports]
     return (
         f"type={result.message_type} station={station_id} reports={reports} "
-        f"q_grades={result.question_grades} queue={result.queue_note!r} break={_break_repr(result.break_info)}"
+        f"q_grades={result.question_grades} queue={result.queue_note!r} "
+        f"break={_break_repr(result.break_info)} limit={_limit_repr(result.limit_info)}"
     )
 
 
@@ -28,12 +42,15 @@ def _llm_based(text: str) -> str:
     reports = [(r.grade, r.status) for r in er.reports]
     return (
         f"type={er.message_type} station={result.station_id} reports={reports} "
-        f"q_grades={er.question_grades} queue={er.queue_note!r} break={_break_repr(er.break_info)}"
+        f"q_grades={er.question_grades} queue={er.queue_note!r} "
+        f"break={_break_repr(er.break_info)} limit={_limit_repr(er.limit_info)}"
     )
 
 
 def main() -> None:
-    all_texts = REPORTS + QUESTIONS + REPORTS_WITH_UNKNOWN_STATION + OFF_TOPIC_OR_NO_SIGNAL + BREAK_REPORTS
+    all_texts = (
+        REPORTS + QUESTIONS + REPORTS_WITH_UNKNOWN_STATION + OFF_TOPIC_OR_NO_SIGNAL + BREAK_REPORTS + LIMIT_REPORTS
+    )
     seen: set[str] = set()
     for text in all_texts:
         if text in seen:

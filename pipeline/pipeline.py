@@ -129,4 +129,15 @@ def process_message(
             raw_text=text,
         )
 
+    if result.limit_info is not None:
+        repo.insert_fuel_limit(
+            conn,
+            station_id=station_id,
+            limit_info=result.limit_info,
+            peer_id=peer_id,
+            conversation_message_id=conversation_message_id,
+            author_id=author_id,
+            raw_text=text,
+        )
+
     return PipelineOutcome(f"report:{station_id}")

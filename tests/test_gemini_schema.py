@@ -43,3 +43,19 @@ def test_recurses_into_nested_nullable_object_break_info():
     assert break_info_schema["properties"]["kind"]["nullable"] is True
     assert break_info_schema["properties"]["until"]["nullable"] is True
     assert break_info_schema["properties"]["duration_note"]["nullable"] is True
+
+
+def test_non_nullable_enum_survives_inside_nullable_object():
+    # limit_info.status — первый случай НЕ-nullable enum-поля внутри
+    # nullable родительского объекта: сам limit_info может быть null, но
+    # если он есть — status обязателен (не null). Конвертер не должен
+    # ошибочно проставить nullable туда, где его не было в исходной схеме.
+    result = _to_gemini_schema(PARAMETERS_SCHEMA)
+    limit_info_schema = result["properties"]["limit_info"]
+    assert limit_info_schema["type"] == "object"
+    assert limit_info_schema["nullable"] is True
+    status_schema = limit_info_schema["properties"]["status"]
+    assert status_schema["type"] == "string"
+    assert "nullable" not in status_schema
+    assert status_schema["enum"] == ["limited", "unlimited"]
+    assert limit_info_schema["properties"]["liters"]["nullable"] is True

@@ -45,6 +45,24 @@ def _insert_break(
     conn.commit()
 
 
+def _insert_limit(
+    conn: sqlite3.Connection,
+    *,
+    station_id: str,
+    status: str,
+    liters: int | None,
+    minutes_ago: float,
+) -> None:
+    reported_at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+    conn.execute(
+        "INSERT INTO fuel_limit "
+        "(station_id, status, liters, peer_id, conversation_message_id, "
+        " author_id, reported_at, raw_text) VALUES (?, ?, ?, 1, 1, 1, ?, 'test')",
+        (station_id, status, liters, reported_at),
+    )
+    conn.commit()
+
+
 def test_answer_question_unknown_station():
     # Станция не распознана — бот молчит (None), не пишет "не понял" в чат.
     conn = get_connection(":memory:")
@@ -177,3 +195,40 @@ def test_answer_question_uses_latest_break_not_older_one():
     text = answer_question(conn, station_id="lukoil_vilga", grades=[])
     assert "отстой топлива" in text
     assert "слив бензовоза" not in text
+
+
+def test_answer_question_shows_limit_with_no_fuel_facts_at_all():
+    conn = get_connection(":memory:")
+    _insert_limit(conn, station_id="lukoil_vilga", status="limited", liters=30, minutes_ago=10)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=[])
+    assert text is not None
+    assert "лимит 30 л" in text
+
+
+def test_answer_question_shows_unlimited_status():
+    conn = get_connection(":memory:")
+    _insert_limit(conn, station_id="gazprom", status="unlimited", liters=None, minutes_ago=10)
+    text = answer_question(conn, station_id="gazprom", grades=[])
+    assert "лимита нет" in text
+
+
+def test_answer_question_shows_limit_alongside_fuel_facts_and_break():
+    # Все три вида фактов — марки, перерыв, лимит — показываются вместе,
+    # ни один не подменяет другой.
+    conn = get_connection(":memory:")
+    _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue_note=None, minutes_ago=5)
+    _insert_break(conn, station_id="lukoil_vilga", kind="перерыв", until=None, duration_note=None, minutes_ago=5)
+    _insert_limit(conn, station_id="lukoil_vilga", status="limited", liters=20, minutes_ago=5)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=["92"])
+    assert "92 - Есть" in text
+    assert "технический перерыв" in text
+    assert "лимит 20 л" in text
+
+
+def test_answer_question_uses_latest_limit_not_older_one():
+    conn = get_connection(":memory:")
+    _insert_limit(conn, station_id="lukoil_vilga", status="limited", liters=20, minutes_ago=60)
+    _insert_limit(conn, station_id="lukoil_vilga", status="unlimited", liters=None, minutes_ago=5)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=[])
+    assert "лимита нет" in text
+    assert "лимит 20 л" not in text

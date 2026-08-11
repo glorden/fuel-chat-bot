@@ -11,6 +11,7 @@ from pipeline.resolve_station import resolve_station
 from tests.fixtures import (
     BREAK_REPORTS,
     GENERIC_AVAILABILITY_NOT_CAPTURED_BY_RULES,
+    LIMIT_REPORTS,
     OFF_TOPIC_OR_NO_SIGNAL,
     QUESTIONS,
     REPORTS,
@@ -168,6 +169,44 @@ def test_pure_break_report_resolves_station():
     assert resolve_station(BREAK_REPORTS[1]) == "gazprom"
     assert resolve_station(BREAK_REPORTS[2]) == "opti_shuyskoe"
     assert resolve_station(BREAK_REPORTS[3]) == "tatneft_silikatny"
+
+
+def test_limit_report_extracts_liters():
+    result = extract(LIMIT_REPORTS[0])  # "На Роснефти лимит 30 литров"
+    assert result.message_type == "report"
+    assert result.reports == []
+    assert result.limit_info.status == "limited"
+    assert result.limit_info.liters == 30
+
+
+def test_limit_report_extracts_unlimited():
+    result = extract(LIMIT_REPORTS[1])  # "На Газпроме лимита нет, наливают сколько хочешь"
+    assert result.limit_info.status == "unlimited"
+    assert result.limit_info.liters is None
+
+
+def test_limit_report_short_liters_abbreviation():
+    result = extract(LIMIT_REPORTS[2])  # "Татнефть силикатный, лимит 20 л"
+    assert result.limit_info.status == "limited"
+    assert result.limit_info.liters == 20
+
+
+def test_pure_limit_report_resolves_station():
+    # Симметрично break_info: чистый лимит без марки тоже должен резолвить
+    # станцию, а не проваливаться в irrelevant.
+    assert resolve_station(LIMIT_REPORTS[0]) is None  # "Роснефти" без адреса, несколько точек
+    assert resolve_station(LIMIT_REPORTS[1]) == "gazprom"
+    assert resolve_station(LIMIT_REPORTS[2]) == "tatneft_silikatny"
+
+
+def test_liters_100_is_not_mistaken_for_grade_100():
+    # "100" — единственная марка-число, которая пересекается с правдоподобным
+    # значением лимита. "100 л"/"100 литров" не должно попадать в reports
+    # как марка АИ-100.
+    result = extract("На Опти Шуйское лимит 100 литров")
+    assert result.reports == []
+    assert result.limit_info.status == "limited"
+    assert result.limit_info.liters == 100
 
 
 def test_grade_range_is_not_mistaken_for_a_time_range():
@@ -422,3 +461,16 @@ def test_process_message_writes_break_and_report_together(monkeypatch):
     assert outcome.label == "report:tatneft_silikatny"
     assert conn.execute("SELECT COUNT(*) FROM fuel_report").fetchone()[0] == 2
     assert conn.execute("SELECT COUNT(*) FROM station_break").fetchone()[0] == 1
+
+
+def test_process_message_writes_pure_limit_report_to_fuel_limit(monkeypatch):
+    monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
+    conn: sqlite3.Connection = get_connection(":memory:")
+    outcome = process_message(
+        conn, text="Татнефть силикатный, лимит 20 л",
+        peer_id=2000000001, conversation_message_id=1, author_id=111,
+    )
+    assert outcome.label == "report:tatneft_silikatny"
+    assert conn.execute("SELECT COUNT(*) FROM fuel_report").fetchone()[0] == 0
+    row = conn.execute("SELECT station_id, status, liters FROM fuel_limit").fetchone()
+    assert row == ("tatneft_silikatny", "limited", 20)

@@ -2,12 +2,13 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from pipeline.extract import BreakInfo, ExtractResult, ReportItem, resolve_clock_time_to_iso
+from pipeline.extract import BreakInfo, ExtractResult, LimitInfo, ReportItem, resolve_clock_time_to_iso
 from pipeline.resolve_station import is_known_station
 
 VALID_GRADES = {"92", "95", "98", "100", "ДТ"}
 MESSAGE_TYPES = {"report", "question", "irrelevant"}
 VALID_BREAK_KINDS = {"слив", "отстой", "перерыв"}
+VALID_LIMIT_STATUSES = {"limited", "unlimited"}
 
 TOOL_NAME = "record_analysis"
 TOOL_DESCRIPTION = "Записать разбор сообщения из чата про заправки топливом."
@@ -75,8 +76,33 @@ PARAMETERS_SCHEMA = {
             },
             "required": ["kind", "until", "duration_note"],
         },
+        "limit_info": {
+            "type": ["object", "null"],
+            "description": (
+                "Лимит отпуска топлива в одни руки на станции — только если это ОТЧЁТ "
+                "(сообщение утверждает факт), не вопрос. Для вопросов и отчётов без "
+                "упоминания лимита — null."
+            ),
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": sorted(VALID_LIMIT_STATUSES),
+                    "description": "'limited' — лимит есть, 'unlimited' — лимита нет/сняли.",
+                },
+                "liters": {
+                    "type": ["integer", "null"],
+                    "description": (
+                        "Число литров, если status='limited' и число названо явно; "
+                        "иначе null (в т.ч. всегда null при status='unlimited')."
+                    ),
+                },
+            },
+            "required": ["status", "liters"],
+        },
     },
-    "required": ["message_type", "station_id", "reports", "question_grades", "queue_note", "break_info"],
+    "required": [
+        "message_type", "station_id", "reports", "question_grades", "queue_note", "break_info", "limit_info",
+    ],
 }
 
 
@@ -111,6 +137,23 @@ def _parse_break_info(raw) -> BreakInfo | None:
     return BreakInfo(kind=kind, until=until, duration_note=duration_note)
 
 
+def _parse_limit_info(raw) -> LimitInfo | None:
+    if not isinstance(raw, dict):
+        return None
+
+    status = raw.get("status")
+    if status not in VALID_LIMIT_STATUSES:
+        return None
+
+    if status == "unlimited":
+        return LimitInfo(status="unlimited", liters=None)
+
+    liters = raw.get("liters")
+    if not isinstance(liters, int) or isinstance(liters, bool) or liters <= 0:
+        liters = None
+    return LimitInfo(status="limited", liters=liters)
+
+
 def _parse_arguments(raw: dict) -> LLMAnalysis | None:
     message_type = raw.get("message_type")
     if message_type not in MESSAGE_TYPES:
@@ -134,10 +177,11 @@ def _parse_arguments(raw: dict) -> LLMAnalysis | None:
 
     question_grades = [g for g in (raw.get("question_grades") or []) if g in VALID_GRADES]
 
-    # break_info гейтится через message_type, не отдельным флагом внутри
-    # самого break_info — единственный источник истины "это вопрос или
-    # отчёт", без риска противоречия между двумя полями.
+    # break_info/limit_info гейтятся через message_type, не отдельным флагом
+    # внутри них самих — единственный источник истины "это вопрос или
+    # отчёт", без риска противоречия между полями.
     break_info = _parse_break_info(raw.get("break_info")) if message_type == "report" else None
+    limit_info = _parse_limit_info(raw.get("limit_info")) if message_type == "report" else None
 
     extract_result = ExtractResult(
         message_type=message_type,
@@ -145,5 +189,6 @@ def _parse_arguments(raw: dict) -> LLMAnalysis | None:
         question_grades=question_grades,
         queue_note=queue_note,
         break_info=break_info,
+        limit_info=limit_info,
     )
     return LLMAnalysis(extract_result=extract_result, station_id=station_id)

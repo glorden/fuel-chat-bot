@@ -32,6 +32,12 @@ _UNTIL_HOUR_RE = re.compile(r"(?i)\bдо\s+(\d{1,2})\s*(?:ч\b|час\w*)")
 _RANGE_RE = re.compile(r"(?i)\b(\d{1,2})(?::(\d{2}))?\s*[-–]\s*(\d{1,2})(?::(\d{2}))?\s*(?:ч\b|час\w*)")
 _DURATION_HINT_RE = re.compile(r"(?i)(?:час|мин)\w*\s*(?:на\s+)?\d+|\d+\s*(?:час|мин)\w*")
 
+_LIMIT_KEYWORDS = re.compile(r"(?i)\bлимит\w*|\bограничен\w*|\bв\s+одни\s+руки\b|\bзаливают\b|\bотпускают\b")
+_UNLIMITED_RE = re.compile(
+    r"(?i)без\s+(?:огранич\w*|лимит\w*)|(?:огранич\w*|лимит\w*)\s+нет|не\s+огранич\w*"
+)
+_LITERS_RE = re.compile(r"(?i)(\d{1,3})\s*л(?:итр\w*)?\b")
+
 
 def _normalize_grade(raw: str) -> str:
     raw_low = raw.lower()
@@ -68,12 +74,19 @@ class BreakInfo:
 
 
 @dataclass
+class LimitInfo:
+    status: str  # "limited" | "unlimited"
+    liters: int | None  # только при status == "limited" и явно названном числе
+
+
+@dataclass
 class ExtractResult:
     message_type: str  # "report" | "question" | "irrelevant"
     reports: list[ReportItem] = field(default_factory=list)
     question_grades: list[str] = field(default_factory=list)
     queue_note: str | None = None
     break_info: BreakInfo | None = None
+    limit_info: LimitInfo | None = None
 
 
 def _extract_queue_note(text: str) -> str | None:
@@ -97,6 +110,12 @@ def _extract_grades_with_status(text: str) -> list[ReportItem]:
         if not clause:
             continue
         for match in _GRADE_TOKEN.finditer(clause):
+            after = clause[match.end() : match.end() + 15].lower()
+            if re.match(r"\s*л(?:итр\w*)?\b", after):
+                # "100 л"/"100 литров" — объём в литрах (лимит отпуска), не
+                # марка топлива АИ-100. Единственная марка-число, которая
+                # реально пересекается с правдоподобным значением лимита.
+                continue
             grade = _normalize_grade(match.group(0))
             before = clause[: match.start()].lower()
             negated = any(neg in before[-20:] for neg in _NEGATION_WORDS)
@@ -133,19 +152,32 @@ def _extract_break_info(text: str) -> BreakInfo | None:
     return BreakInfo(kind=kind, until=until, duration_note=duration_note)
 
 
+def _extract_limit_info(text: str) -> LimitInfo | None:
+    if _UNLIMITED_RE.search(text):
+        return LimitInfo(status="unlimited", liters=None)
+    if not _LIMIT_KEYWORDS.search(text):
+        return None
+    if m := _LITERS_RE.search(text):
+        return LimitInfo(status="limited", liters=int(m.group(1)))
+    # Ключевое слово про лимит есть, но чёткого числа нет — не угадываем.
+    return None
+
+
 def extract(text: str) -> ExtractResult:
     if _QUESTION_MARKERS.search(text):
         grades = sorted({_normalize_grade(m.group(0)) for m in _GRADE_TOKEN.finditer(text)})
         return ExtractResult(message_type="question", question_grades=grades)
 
     break_info = _extract_break_info(text)
+    limit_info = _extract_limit_info(text)
     reports = _extract_grades_with_status(text)
-    if reports or break_info is not None:
+    if reports or break_info is not None or limit_info is not None:
         return ExtractResult(
             message_type="report",
             reports=reports,
             queue_note=_extract_queue_note(text),
             break_info=break_info,
+            limit_info=limit_info,
         )
 
     return ExtractResult(message_type="irrelevant")

@@ -45,6 +45,18 @@ CREATE TABLE IF NOT EXISTS station_break (
     reported_at TEXT NOT NULL,
     raw_text TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS fuel_limit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    station_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    liters INTEGER,
+    peer_id INTEGER NOT NULL,
+    conversation_message_id INTEGER NOT NULL,
+    author_id INTEGER NOT NULL,
+    reported_at TEXT NOT NULL,
+    raw_text TEXT NOT NULL
+);
 """
 
 

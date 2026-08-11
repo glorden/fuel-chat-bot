@@ -1,4 +1,4 @@
-from pipeline.facts import MOSCOW_TZ, StationBreak, StationFact
+from pipeline.facts import MOSCOW_TZ, StationBreak, StationFact, StationLimit
 
 _FRESHNESS_NOTE = {
     "fresh": "",
@@ -14,15 +14,20 @@ _BREAK_KIND_TEXT = {
 
 
 def render_station_answer(
-    station_name: str, facts: list[StationFact], break_info: StationBreak | None = None
+    station_name: str,
+    facts: list[StationFact],
+    break_info: StationBreak | None = None,
+    limit_info: StationLimit | None = None,
 ) -> str:
-    if not facts and break_info is None:
+    if not facts and break_info is None and limit_info is None:
         return f"По «{station_name}» пока нет данных в чате — никто не сообщал."
 
     uniform_queue = _uniform_queue_note(facts)
     lines = [_render_header(station_name, facts, uniform_queue)]
     if break_info is not None:
         lines.append(_render_break_line(break_info))
+    if limit_info is not None:
+        lines.append(_render_limit_line(limit_info))
     lines.extend(_render_grouped_fact_lines(facts, uniform_queue))
     return "\n".join(lines)
 
@@ -50,6 +55,16 @@ def _render_break_line(b: StationBreak) -> str:
     else:
         when = f"сообщили {_format_age(b.reported_minutes_ago)} назад"
     return f"{kind_text}: {when}."
+
+
+def _render_limit_line(limit: StationLimit) -> str:
+    if limit.status == "unlimited":
+        value = "лимита нет"
+    elif limit.liters is not None:
+        value = f"лимит {limit.liters} л в одни руки"
+    else:
+        value = "лимит есть, точный объём не уточнили"
+    return f"{value} (сообщили {_format_age(limit.reported_minutes_ago)} назад)."
 
 
 def _render_grouped_fact_lines(facts: list[StationFact], uniform_queue: str | None) -> list[str]:

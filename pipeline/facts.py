@@ -21,3 +21,10 @@ class StationBreak:
     until: datetime | None
     duration_note: str | None
     reported_minutes_ago: float
+
+
+@dataclass
+class StationLimit:
+    status: str  # "limited" | "unlimited"
+    liters: int | None
+    reported_minutes_ago: float
