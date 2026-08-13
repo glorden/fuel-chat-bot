@@ -3,7 +3,7 @@ import logging
 from google import genai
 from google.genai import types
 
-from config import GEMINI_API_KEY, GEMINI_MODEL, LLM_TIMEOUT_SECONDS
+from config import AI_PROXY_URL, GEMINI_API_KEY, GEMINI_MODEL, LLM_TIMEOUT_SECONDS
 from llm.prompts import build_system_prompt, build_user_content
 from llm.schema import PARAMETERS_SCHEMA, TOOL_DESCRIPTION, TOOL_NAME
 
@@ -52,8 +52,21 @@ _GENERATE_CONFIG = types.GenerateContentConfig(
         )
     ),
 )
+# Симметрично llm/groq_client.py. HttpOptions.client_args пробрасывается в
+# google/genai/_api_client.py как httpx.Client(**client_args) — т.е.
+# client_args={"proxy": ...} даёт тот же httpx.Client(proxy=...), что и у
+# Groq (см. DEPLOY.md). НЕ проверено живым трафиком через прокси в этом
+# проекте (на library-vps используется только LLM_PROVIDER=groq — тот же
+# внешний сервер отдаёт Gemini 403 даже через туннель, см. DEPLOY.md).
+# Пусто/не задано — поведение не меняется.
 _client = (
-    genai.Client(api_key=GEMINI_API_KEY, http_options=types.HttpOptions(timeout=LLM_TIMEOUT_SECONDS * 1000))
+    genai.Client(
+        api_key=GEMINI_API_KEY,
+        http_options=types.HttpOptions(
+            timeout=LLM_TIMEOUT_SECONDS * 1000,
+            client_args={"proxy": AI_PROXY_URL} if AI_PROXY_URL else None,
+        ),
+    )
     if GEMINI_API_KEY else None
 )
 

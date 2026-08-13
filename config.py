@@ -19,6 +19,11 @@ LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "groq").strip().lower()
 if LLM_PROVIDER not in ("groq", "gemini"):
     raise ValueError(f"LLM_PROVIDER must be 'groq' or 'gemini', got {LLM_PROVIDER!r}")
 
+# SOCKS5-прокси для исходящих вызовов LLM-вендоров (Groq/Gemini) — см.
+# DEPLOY.md. Пусто/не задано — прямые вызовы, поведение не меняется. Общий
+# для обоих провайдеров, читается их клиентами.
+AI_PROXY_URL = os.environ.get("AI_PROXY_URL") or None
+
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY") or None
 LLM_MODEL = os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile")
 

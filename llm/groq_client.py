@@ -1,9 +1,10 @@
 import json
 import logging
 
+import httpx
 from groq import Groq
 
-from config import GROQ_API_KEY, LLM_MODEL, LLM_TIMEOUT_SECONDS
+from config import AI_PROXY_URL, GROQ_API_KEY, LLM_MODEL, LLM_TIMEOUT_SECONDS
 from llm.prompts import build_system_prompt, build_user_content
 from llm.schema import PARAMETERS_SCHEMA, TOOL_DESCRIPTION, TOOL_NAME
 
@@ -19,7 +20,17 @@ _TOOL_SCHEMA = {
 }
 
 _SYSTEM_PROMPT = build_system_prompt()
-_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+# При заданном AI_PROXY_URL Groq получает собственный httpx.Client с
+# SOCKS5-прокси (см. DEPLOY.md — прод-VPS геолоцирован в стране, откуда Groq
+# доступен только через туннель на внешний сервер). Пусто/не задано —
+# http_client=None, Groq сам строит клиент как раньше.
+_client = (
+    Groq(
+        api_key=GROQ_API_KEY,
+        http_client=httpx.Client(proxy=AI_PROXY_URL, timeout=LLM_TIMEOUT_SECONDS) if AI_PROXY_URL else None,
+    )
+    if GROQ_API_KEY else None
+)
 
 
 def raw_analyze(
