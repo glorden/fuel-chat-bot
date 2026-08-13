@@ -16,8 +16,8 @@ LLM_ENABLED = os.environ.get("LLM_ENABLED", "false").lower() == "true"
 LLM_TIMEOUT_SECONDS = int(os.environ.get("LLM_TIMEOUT_SECONDS", "10"))
 
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "groq").strip().lower()
-if LLM_PROVIDER not in ("groq", "gemini"):
-    raise ValueError(f"LLM_PROVIDER must be 'groq' or 'gemini', got {LLM_PROVIDER!r}")
+if LLM_PROVIDER not in ("groq", "gemini", "mistral"):
+    raise ValueError(f"LLM_PROVIDER must be 'groq', 'gemini' or 'mistral', got {LLM_PROVIDER!r}")
 
 # SOCKS5-прокси для исходящих вызовов LLM-вендоров (Groq/Gemini) — см.
 # DEPLOY.md. Пусто/не задано — прямые вызовы, поведение не меняется. Общий
@@ -29,3 +29,6 @@ LLM_MODEL = os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile")
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or None
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-lite-latest")
+
+MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY") or None
+MISTRAL_MODEL = os.environ.get("MISTRAL_MODEL", "ministral-8b-2512")

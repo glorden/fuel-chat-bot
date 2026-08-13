@@ -17,6 +17,8 @@ def analyze(
     путь их не получает."""
     if LLM_PROVIDER == "gemini":
         from llm.gemini_client import raw_analyze
+    elif LLM_PROVIDER == "mistral":
+        from llm.mistral_client import raw_analyze
     else:
         from llm.groq_client import raw_analyze
 
