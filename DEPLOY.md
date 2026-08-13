@@ -182,7 +182,12 @@ docker compose exec app python -c "import httpx; print(httpx.get('https://api.gr
    файла БД и `gazetteer.yaml` обязаны существовать на хосте **до** первого
    `up` — иначе Docker создаст на месте bind-mount пустую директорию вместо
    файла, и приложение упадёt при старте с непонятной ошибкой вместо чёткой
-   «файл не найден».
+   «файл не найден». На практике полный `TRUNCATE`-checkpoint убирает
+   `bot.db-shm`/`bot.db-wal` целиком (не просто обнуляет) — на сервере их
+   нужно создать пустыми до `up`, `scp` переносить нечего:
+   ```bash
+   ssh library-vps-deploy "touch ~/fuel-chat-bot/bot.db-shm ~/fuel-chat-bot/bot.db-wal"
+   ```
 3. **Ключ для туннеля** — на library-vps, не на машине разработчика:
    ```bash
    mkdir -p secrets
@@ -195,6 +200,21 @@ docker compose exec app python -c "import httpx; print(httpx.get('https://api.gr
    не на library-vps, делается отдельно. Пока ключа там нет — `ai-proxy` не
    поднимется (уйдёт в краш-луп аутентификации), это ожидаемо, не повод
    дебажить дальше.
+
+   Прежде чем тратить диск и время на сборку образов — дешёвая проверка,
+   что ключ реально принят внешним сервером именно в режиме `-N`
+   (единственном, который использует entrypoint.sh; `tunneluser` на
+   `/usr/sbin/nologin` отклоняет обычное выполнение команд, поэтому простой
+   `ssh ... echo ok` тут не тест):
+   ```bash
+   timeout 8 ssh -i secrets/ai_proxy_id_ed25519 \
+     -o UserKnownHostsFile=secrets/ai_proxy_known_hosts \
+     -o BatchMode=yes -N -p "$AI_PROXY_SSH_PORT" \
+     "$AI_PROXY_SSH_USER@$AI_PROXY_SSH_HOST" &
+   pid=$!; sleep 4
+   kill -0 $pid 2>/dev/null && echo OK || echo FAILED
+   kill $pid 2>/dev/null
+   ```
 4. **Первый запуск, LLM выключен** — сначала доказать, что бот вообще
    работает и говорит с VK, не трогая прокси/LLM:
    ```bash
@@ -225,7 +245,12 @@ docker compose exec app python -c "import httpx; print(httpx.get('https://api.gr
    На реальном трафике должны появляться строки `path=llm`, не сплошной
    `path=rule_based reason=llm_fallback`.
 7. **Живая проверка в чате**: тегнуть бота реальным вопросом в беседе,
-   сверить и ответ, и соответствующую строку лога.
+   сверить и ответ, и соответствующую строку лога. Не обязательно
+   тегать самому — можно просто последить `docker compose logs -f app`
+   (фильтровать на `path=|outcome=|Traceback|ERROR`) на органическом трафике
+   беседы: реальных тематических сообщений обычно достаточно за 5-10 минут,
+   и это заодно живая проверка на разнообразных, не подготовленных заранее
+   формулировках.
 8. **Бэкапы** — см. ниже, сознательно не решено в рамках базового деплоя.
 
 ## Операционные нюансы
