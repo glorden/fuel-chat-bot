@@ -28,3 +28,7 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# приватный ключ + known_hosts туннеля ai-proxy — генерируются на
+# library-vps, никогда не коммитятся
+secrets/

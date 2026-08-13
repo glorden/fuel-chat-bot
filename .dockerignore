@@ -1,0 +1,28 @@
+# Не часть образа: локальные окружения/кэши, реальные данные и секреты —
+# приезжают через volumes/env_file в docker-compose.yml, не через COPY.
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.vkbottle
+tests
+
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+.env
+.claude
+
+ARCHITECTURE.md
+CLAUDE.md
+PROGRESS.md
+DEPLOY.md
+README.md
+
+# gazetteer.yaml сознательно НЕ здесь: остаётся в образе как fallback на
+# случай, если bind-mount в docker-compose.yml почему-то не настроен — в
+# норме bind-mount поверх него всё равно единственный источник правды (на
+# сервере его правят руками, см. CLAUDE.md).

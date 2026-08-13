@@ -103,7 +103,15 @@ Long Poll (vkbottle) → фильтр себя/дублей → склейка �
 
 ## Деплой
 
-Docker-контейнер с одним Long Poll-воркером на небольшом VPS — публичный HTTPS не нужен благодаря Long Poll. `docker-compose`, volume под SQLite-файл и `gazetteer.yaml`, секреты через `.env`.
+Подробности, включая процедуру и известные ограничения — в [DEPLOY.md](DEPLOY.md).
+Кратко: Docker Compose на library-vps, два сервиса — `app` (бот, без
+входящего HTTP, публичный HTTPS не нужен благодаря Long Poll) и `ai-proxy`
+(сайдкар, SOCKS5-туннель по SSH на внешний сервер вне России — сам VPS
+геолоцирован в стране, откуда Groq/Gemini недоступны напрямую, подтверждено
+живьём). `bot.db`(+`-shm`/`-wal`) и `gazetteer.yaml` — bind-mount с хоста,
+переживают пересборку. Секреты — через `.env`, ключ туннеля — через
+`secrets/` (не коммитятся). На library-vps включён только `LLM_PROVIDER=groq`
+— Gemini через тот же туннель пока не проходит (см. DEPLOY.md).
 
 ## Возможное развитие (не в MVP)
 

@@ -4,7 +4,7 @@
 
 ## Проект
 
-VK-бот для тематической беседы про заправку топливом. Дизайн — в [ARCHITECTURE.md](ARCHITECTURE.md), статус — в [PROGRESS.md](PROGRESS.md).
+VK-бот для тематической беседы про заправку топливом. Дизайн — в [ARCHITECTURE.md](ARCHITECTURE.md), статус — в [PROGRESS.md](PROGRESS.md), деплой — в [DEPLOY.md](DEPLOY.md).
 
 ## Рабочий процесс (важно, соблюдать строго)
 

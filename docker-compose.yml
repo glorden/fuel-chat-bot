@@ -1,0 +1,53 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Реальные накопленные данные, переживают rebuild/redeploy (см.
+      # DEPLOY.md). db/schema.py::get_connection() открывает ОДНО соединение
+      # на весь процесс (vk_handlers.py, не закрывается между сообщениями) —
+      # WAL-checkpoint усекает bot.db-wal на месте, без unlink+recreate
+      # файла, поэтому побайтовый bind-mount отдельных файлов (не
+      # директории) здесь безопасен.
+      - ./bot.db:/app/bot.db
+      - ./bot.db-shm:/app/bot.db-shm
+      - ./bot.db-wal:/app/bot.db-wal
+      # Правится вручную прямо на сервере (см. CLAUDE.md) — файл ОБЯЗАН уже
+      # существовать на хосте до первого `up`: если bind-mount указывает на
+      # несуществующий файл, Docker создаст на этом месте пустую директорию
+      # вместо файла, и yaml.safe_load упадёт при старте.
+      - ./gazetteer.yaml:/app/gazetteer.yaml
+    depends_on:
+      - ai-proxy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # SOCKS5-туннель наружу для вызовов Groq (и Gemini, когда/если включат) —
+  # см. DEPLOY.md, "AI-провайдер из заблокированной страны". Свой контейнер
+  # и свой ключ — НЕ общий с ai-proxy книжного проекта (book library) на
+  # этом же хосте, общий только внешний сервер-цель. Ничего не публикует
+  # наружу (нет ports:), виден только сиблингу app по compose-сети этого
+  # проекта.
+  ai-proxy:
+    build:
+      context: docker/ai-proxy
+    restart: unless-stopped
+    environment:
+      TUNNEL_SSH_HOST: "${AI_PROXY_SSH_HOST:?}"
+      TUNNEL_SSH_USER: "${AI_PROXY_SSH_USER:-tunneluser}"
+      TUNNEL_SSH_PORT: "${AI_PROXY_SSH_PORT:-22}"
+    volumes:
+      - ./secrets/ai_proxy_id_ed25519:/keys/id_ed25519:ro
+      - ./secrets/ai_proxy_known_hosts:/keys/known_hosts:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
