@@ -15,7 +15,7 @@ MIN_REPLY_GAP_SECONDS = int(os.environ.get("MIN_REPLY_GAP_SECONDS", "5"))
 LLM_ENABLED = os.environ.get("LLM_ENABLED", "false").lower() == "true"
 LLM_TIMEOUT_SECONDS = int(os.environ.get("LLM_TIMEOUT_SECONDS", "10"))
 
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "groq").strip().lower()
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "mistral").strip().lower()
 if LLM_PROVIDER not in ("groq", "gemini", "mistral"):
     raise ValueError(f"LLM_PROVIDER must be 'groq', 'gemini' or 'mistral', got {LLM_PROVIDER!r}")
 
