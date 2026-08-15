@@ -108,6 +108,24 @@ def insert_fuel_limit(
     conn.commit()
 
 
+def set_auto_reply_enabled(conn: sqlite3.Connection, *, enabled: bool, changed_by: int) -> None:
+    conn.execute(
+        "INSERT INTO auto_reply_setting (enabled, changed_by, changed_at) VALUES (?, ?, ?)",
+        (int(enabled), changed_by, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+
+
+def get_auto_reply_enabled(conn: sqlite3.Connection, *, default: bool) -> bool:
+    """Последняя строка побеждает (append-only, как station_break/fuel_limit).
+    default — значение из .env (AUTO_REPLY_ON_QUESTION), используется, пока
+    !вкл/!выкл не сказали ни разу с момента создания этой таблицы."""
+    row = conn.execute(
+        "SELECT enabled FROM auto_reply_setting ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    return bool(row[0]) if row is not None else default
+
+
 def insert_unresolved_mention(
     conn: sqlite3.Connection,
     *,

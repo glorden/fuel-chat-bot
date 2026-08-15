@@ -1,7 +1,7 @@
 import time
 
 import vk_handlers
-from vk_handlers import _quoted_context_text, _recent_author_message
+from vk_handlers import _parse_admin_command, _quoted_context_text, _recent_author_message
 
 
 class _FakeForeign:
@@ -66,3 +66,19 @@ def test_recent_author_message_expires_after_ttl():
         assert _recent_author_message(key) is None
     finally:
         del vk_handlers._last_author_message[key]
+
+
+def test_parse_admin_command_recognizes_on_and_off():
+    assert _parse_admin_command("!вкл") is True
+    assert _parse_admin_command("!выкл") is False
+
+
+def test_parse_admin_command_case_insensitive_and_trims_whitespace():
+    assert _parse_admin_command("  !ВКЛ  ") is True
+    assert _parse_admin_command("!Выкл") is False
+
+
+def test_parse_admin_command_none_for_regular_text():
+    assert _parse_admin_command("Есть 95 на Роснефти?") is None
+    assert _parse_admin_command("!вкл, пожалуйста") is None  # не голая команда
+    assert _parse_admin_command("") is None

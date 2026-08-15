@@ -3,7 +3,7 @@ import time
 
 from vkbottle.bot import Bot, Message
 
-from config import AUTO_REPLY_ON_QUESTION, GROUP_ID, MIN_REPLY_GAP_SECONDS
+from config import ADMIN_ID, AUTO_REPLY_ON_QUESTION, GROUP_ID, MIN_REPLY_GAP_SECONDS
 from db import repo
 from db.schema import get_connection
 from pipeline.pipeline import process_message
@@ -52,6 +52,18 @@ def _quoted_context_text(message: Message) -> str:
     return "\n".join(parts)
 
 
+def _parse_admin_command(text: str) -> bool | None:
+    """True/False для "!вкл"/"!выкл" (переключатель AUTO_REPLY_ON_QUESTION),
+    None — если это не команда. Только текст целиком, без хвостов — команда,
+    а не обычная реплика по теме."""
+    normalized = text.strip().lower()
+    if normalized == "!вкл":
+        return True
+    if normalized == "!выкл":
+        return False
+    return None
+
+
 async def _mention_tag(bot: Bot, user_id: int) -> str:
     """Тег вида "[id...|Имя], " для явного упоминания адресата в ответе.
     Пустая строка, если user_id — не пользователь (например, сообщение
@@ -74,6 +86,14 @@ def register_handlers(bot: Bot) -> None:
         repo.mark_processed(_conn, message.peer_id, message.conversation_message_id)
 
         own_text = (message.text or "").strip()
+
+        admin_command = _parse_admin_command(own_text)
+        if admin_command is not None and ADMIN_ID is not None and message.from_id == ADMIN_ID:
+            repo.set_auto_reply_enabled(_conn, enabled=admin_command, changed_by=message.from_id)
+            state = "включён" if admin_command else "выключен"
+            await message.reply(f"Автоответ на вопросы {state}.")
+            return
+
         quoted_text = _quoted_context_text(message)
         combined_text = f"{quoted_text}\n{own_text}".strip() if quoted_text else own_text
 
@@ -101,9 +121,11 @@ def register_handlers(bot: Bot) -> None:
 
         if not reply_text:
             return
-        # Отвечаем, только если бота явно упомянули, или включён автоответ
-        # (AUTO_REPLY_ON_QUESTION) — плюс дебаунс на чат как страховка от флуда.
-        if not (message.is_mentioned or AUTO_REPLY_ON_QUESTION):
+        # Отвечаем, только если бота явно упомянули, или включён автоответ —
+        # плюс дебаунс на чат как страховка от флуда. Живое значение из БД
+        # (переключается !вкл/!выкл, см. выше), AUTO_REPLY_ON_QUESTION из
+        # .env — дефолт, пока переключателем ни разу не пользовались.
+        if not (message.is_mentioned or repo.get_auto_reply_enabled(_conn, default=AUTO_REPLY_ON_QUESTION)):
             return
         if not _can_reply(message.peer_id):
             return

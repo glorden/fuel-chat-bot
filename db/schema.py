@@ -57,6 +57,17 @@ CREATE TABLE IF NOT EXISTS fuel_limit (
     reported_at TEXT NOT NULL,
     raw_text TEXT NOT NULL
 );
+
+-- Append-only, как station_break/fuel_limit: текущее значение — последняя
+-- строка, без UPDATE. Управляется командами !вкл/!выкл от ADMIN_ID (см.
+-- vk_handlers.py) — переживает рестарт/редеплой, в отличие от AUTO_REPLY_ON_QUESTION
+-- в .env, который остаётся значением по умолчанию, пока сюда не написали ни разу.
+CREATE TABLE IF NOT EXISTS auto_reply_setting (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    enabled INTEGER NOT NULL,
+    changed_by INTEGER NOT NULL,
+    changed_at TEXT NOT NULL
+);
 """
 
 
