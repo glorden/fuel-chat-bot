@@ -197,6 +197,30 @@ def test_pure_limit_report_resolves_station():
     assert resolve_station(LIMIT_REPORTS[0]) is None  # "Роснефти" без адреса, несколько точек
     assert resolve_station(LIMIT_REPORTS[1]) == "gazprom"
     assert resolve_station(LIMIT_REPORTS[2]) == "tatneft_silikatny"
+    assert resolve_station(LIMIT_REPORTS[3]) == "stk_vytegorskoe"
+    assert resolve_station(LIMIT_REPORTS[4]) == "lukoil_vilga"
+
+
+def test_limit_report_full_tank_phrasing_is_unlimited():
+    # Реальное сообщение из чата 2026-08-15 — "полный бак дают" в этом чате
+    # означает "лимита нет".
+    result = extract(LIMIT_REPORTS[3])  # "На стк полный бак дают + в канистру"
+    assert result.limit_info.status == "unlimited"
+    assert result.limit_info.liters is None
+
+
+def test_limit_report_until_full_phrasing_is_unlimited():
+    result = extract(LIMIT_REPORTS[4])  # "На Лукойле Вилга наливают до полного..."
+    assert result.limit_info.status == "unlimited"
+    assert result.limit_info.liters is None
+
+
+def test_full_tank_without_permission_word_is_not_mistaken_for_unlimited():
+    # Личный рассказ "залил полный бак" без слова-разрешения рядом (дают/
+    # наливают/можно/...) не должен читаться как факт про политику станции —
+    # иначе случайное "залил полный бак, спасибо" исказило бы fuel_limit.
+    result = extract("Заправился на Вилге, залил полный бак, всё ок")
+    assert result.limit_info is None
 
 
 def test_liters_100_is_not_mistaken_for_grade_100():
