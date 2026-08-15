@@ -1,10 +1,12 @@
 # Деплой
 
 Docker Compose на VPS, геолоцированном в России. Публичный HTTPS не нужен —
-Long Poll исходящий, входящих портов боту не требуется вообще. Единственная
-сложность — оба LLM-провайдера (Groq, Gemini) блокируют запросы из России на
-уровне API-вендора, поэтому исходящие вызовы к ним заворачиваются в
-SOCKS5-туннель (см. ниже).
+Long Poll исходящий, входящих портов боту не требуется вообще. Дефолтный
+LLM-провайдер (`mistral`) работает с этого VPS напрямую, без каких-либо
+дополнительных мер. Единственная сложность — Groq и Gemini (альтернативные
+провайдеры, `LLM_PROVIDER=groq`/`gemini`) блокируют запросы из России на
+уровне API-вендора, поэтому для НИХ исходящие вызовы заворачиваются в
+SOCKS5-туннель (см. ниже) — на дефолтной конфигурации это не задействуется.
 
 ## Переменные окружения
 
@@ -243,11 +245,14 @@ docker compose exec app python -c "import httpx; print(httpx.get('https://api.gr
    Проверить: `docker compose ps` (`app`+`ai-proxy` оба `Up`), реальное
    сообщение в беседе обрабатывается rule-based-путём, `df -h /`/`docker
    stats --no-stream`/`docker ps -a` (чужие контейнеры не задеты).
-5. **Проверка туннеля** — см. «Проверка» выше. Убедиться, что третий вызов
+5. **Проверка туннеля** — см. «Проверка» выше (нужно только для
+   `LLM_PROVIDER=groq`/`gemini` — с дефолтным `mistral` шаг не требуется,
+   см. «Mistral не требует туннеля»). Убедиться, что третий вызов
    даёт `401`, не `403`, прежде чем включать LLM.
-6. **Включение LLM**: в `.env` — `LLM_ENABLED=true`, `LLM_PROVIDER=groq`
-   (прописать явно, не полагаться молча на дефолт). Обычный `restart` не
-   перечитывает `env_file` — нужен `--force-recreate`:
+6. **Включение LLM**: в `.env` — `LLM_ENABLED=true`, `LLM_PROVIDER=mistral`
+   (прописать явно, не полагаться молча на дефолт — либо `groq`, если нужен
+   именно он). Обычный `restart` не перечитывает `env_file` — нужен
+   `--force-recreate`:
    ```bash
    docker compose up -d --force-recreate app
    docker compose logs -f app | grep -E "path=(llm|rule_based)"
@@ -281,6 +286,6 @@ docker compose exec app python -c "import httpx; print(httpx.get('https://api.gr
 
 **Сознательно не часть этого деплоя.** Как и у book library — решение
 отложено. Открытый риск: без бэкапа вне VPS `bot.db` (накопленная история
-отчётов, `unresolved_mention`, `station_break`, `fuel_limit`) не защищена от
-потери самого VPS. `gazetteer.yaml` менее критичен — он же version-controlled
-в git, восстановим из репозитория.
+отчётов, `unresolved_mention`, `station_break`, `fuel_limit`,
+`auto_reply_setting`) не защищена от потери самого VPS. `gazetteer.yaml`
+менее критичен — он же version-controlled в git, восстановим из репозитория.
