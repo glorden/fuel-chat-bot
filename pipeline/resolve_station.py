@@ -4,6 +4,8 @@ from pathlib import Path
 
 import yaml
 
+from pipeline.extract import LimitInfo
+
 _GAZETTEER_PATH = Path(__file__).resolve().parent.parent / "gazetteer.yaml"
 
 
@@ -28,7 +30,8 @@ _STATIONS_BY_ID = {s["id"]: s for s in _STATIONS}
 _DEFAULT_STATION_BY_BRAND = {
     s["brand"]: s["id"] for s in _STATIONS if s.get("default_for_brand")
 }
-_BRAND_FUEL_LIMITS: dict[str, int] = _GAZETTEER.get("brand_fuel_limits", {})
+_BRAND_FUEL_LIMITS: dict[str, dict] = _GAZETTEER.get("brand_fuel_limits", {})
+_BRAND_FUEL_LIMITS_DISPLAY: list[str] = _GAZETTEER.get("brand_fuel_limits_display", [])
 
 
 def get_station_name(station_id: str) -> str:
@@ -39,10 +42,25 @@ def is_known_station(station_id: str) -> bool:
     return station_id in _STATIONS_BY_ID
 
 
-def get_brand_fuel_limit(brand: str) -> int | None:
-    """Статичный лимит отпуска (литры) на весь бренд, из gazetteer.yaml
+def get_brand_fuel_limit(brand: str) -> LimitInfo | None:
+    """Статичный лимит отпуска на весь бренд, из gazetteer.yaml
     (brand_fuel_limits) — None, если для бренда лимит не известен."""
-    return _BRAND_FUEL_LIMITS.get(brand)
+    raw = _BRAND_FUEL_LIMITS.get(brand)
+    if raw is None:
+        return None
+    return LimitInfo(status=raw["status"], liters=raw.get("liters"))
+
+
+def get_displayed_brand_fuel_limits() -> list[tuple[str, LimitInfo]]:
+    """Бренды и лимиты для команды "!лимит"/"!лимиты" — только явно
+    перечисленные в gazetteer.yaml::brand_fuel_limits_display (не все бренды
+    с известным лимитом вообще, см. комментарий там), в заданном порядке."""
+    result = []
+    for brand in _BRAND_FUEL_LIMITS_DISPLAY:
+        limit = get_brand_fuel_limit(brand)
+        if limit is not None:
+            result.append((brand, limit))
+    return result
 
 
 def resolve_brand(text: str) -> str | None:

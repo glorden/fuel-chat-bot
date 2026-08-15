@@ -112,10 +112,12 @@ def answer_brand_limit_question(text: str) -> str | None:
     brand = resolve_brand(text)
     if brand is None:
         return None
-    liters = get_brand_fuel_limit(brand)
-    if liters is None:
+    limit = get_brand_fuel_limit(brand)
+    if limit is None:
         return None
-    return f"{brand}: лимит {liters} л в одни руки."
+    if limit.status == "unlimited":
+        return f"{brand}: без ограничений."
+    return f"{brand}: лимит {limit.liters} л в одни руки."
 
 
 def answer_question(conn: sqlite3.Connection, *, station_id: str | None, grades: list[str]) -> str | None:

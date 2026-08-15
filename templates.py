@@ -1,3 +1,4 @@
+from pipeline.extract import LimitInfo
 from pipeline.facts import MOSCOW_TZ, StationBreak, StationFact, StationLimit
 
 _FRESHNESS_NOTE = {
@@ -55,6 +56,19 @@ def _render_break_line(b: StationBreak) -> str:
     else:
         when = f"сообщили {_format_age(b.reported_minutes_ago)} назад"
     return f"{kind_text}: {when}."
+
+
+def render_brand_limits_list(limits: list[tuple[str, LimitInfo]]) -> str:
+    """Ответ на команду "!лимит"/"!лимиты" — статичные лимиты по брендам из
+    gazetteer.yaml (см. resolve_station.py::get_displayed_brand_fuel_limits),
+    не факты из чата (у тех нет фиксированного списка брендов на показ)."""
+    if not limits:
+        return "Лимиты пока не заданы."
+    lines = ["Лимиты отпуска топлива в одни руки:"]
+    for brand, limit in limits:
+        value = "без ограничений" if limit.status == "unlimited" else f"{limit.liters} л"
+        lines.append(f"{brand}: {value}")
+    return "\n".join(lines)
 
 
 def _render_limit_line(limit: StationLimit) -> str:

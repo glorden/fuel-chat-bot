@@ -1,7 +1,7 @@
 import time
 
 import vk_handlers
-from vk_handlers import _parse_admin_command, _quoted_context_text, _recent_author_message
+from vk_handlers import _is_limit_list_command, _parse_admin_command, _quoted_context_text, _recent_author_message
 
 
 class _FakeForeign:
@@ -82,3 +82,15 @@ def test_parse_admin_command_none_for_regular_text():
     assert _parse_admin_command("Есть 95 на Роснефти?") is None
     assert _parse_admin_command("!вкл, пожалуйста") is None  # не голая команда
     assert _parse_admin_command("") is None
+
+
+def test_is_limit_list_command_recognizes_singular_and_plural():
+    assert _is_limit_list_command("!лимит") is True
+    assert _is_limit_list_command("!лимиты") is True
+    assert _is_limit_list_command("  !ЛИМИТЫ  ") is True
+
+
+def test_is_limit_list_command_false_for_regular_text():
+    assert _is_limit_list_command("Какой лимит на Роснефти?") is False
+    assert _is_limit_list_command("!лимиты пожалуйста") is False
+    assert _is_limit_list_command("") is False

@@ -3,11 +3,17 @@ from datetime import datetime, timezone
 
 import pipeline.pipeline as pipeline_module
 from db.schema import get_connection
-from pipeline.extract import ReportItem, extract, resolve_clock_time_to_iso
+from pipeline.extract import LimitInfo, ReportItem, extract, resolve_clock_time_to_iso
 from pipeline.facts import MOSCOW_TZ
 from pipeline.pipeline import process_message
 from pipeline.prefilter import is_on_topic
-from pipeline.resolve_station import get_brand_fuel_limit, resolve_brand, resolve_station
+from pipeline.resolve_station import (
+    get_brand_fuel_limit,
+    get_displayed_brand_fuel_limits,
+    resolve_brand,
+    resolve_station,
+)
+from templates import render_brand_limits_list
 from tests.fixtures import (
     BREAK_REPORTS,
     GENERIC_AVAILABILITY_NOT_CAPTURED_BY_RULES,
@@ -245,10 +251,36 @@ def test_resolve_brand_none_when_no_brand_or_ambiguous():
 
 
 def test_get_brand_fuel_limit_known_and_unknown_brands():
-    assert get_brand_fuel_limit("Роснефть") == 30
-    assert get_brand_fuel_limit("Татнефть") == 50
-    assert get_brand_fuel_limit("Лукойл") == 40
+    assert get_brand_fuel_limit("Роснефть") == LimitInfo(status="limited", liters=30)
+    assert get_brand_fuel_limit("Татнефть") == LimitInfo(status="limited", liters=50)
+    assert get_brand_fuel_limit("Лукойл") == LimitInfo(status="limited", liters=40)
     assert get_brand_fuel_limit("Опти") is None
+
+
+def test_get_brand_fuel_limit_unlimited_brands():
+    assert get_brand_fuel_limit("Газпром") == LimitInfo(status="unlimited", liters=None)
+    assert get_brand_fuel_limit("СТК") == LimitInfo(status="unlimited", liters=None)
+
+
+def test_get_displayed_brand_fuel_limits_is_curated_subset_in_order():
+    # По прямому решению пользователя: список показа уже, чем весь
+    # brand_fuel_limits — СТК туда не входит, хотя лимит у него известен.
+    limits = get_displayed_brand_fuel_limits()
+    assert [brand for brand, _ in limits] == ["Роснефть", "Татнефть", "Лукойл", "Газпром"]
+    assert dict(limits)["Газпром"] == LimitInfo(status="unlimited", liters=None)
+
+
+def test_render_brand_limits_list_formats_mixed_limited_and_unlimited():
+    text = render_brand_limits_list(get_displayed_brand_fuel_limits())
+    assert "Роснефть: 30 л" in text
+    assert "Татнефть: 50 л" in text
+    assert "Лукойл: 40 л" in text
+    assert "Газпром: без ограничений" in text
+    assert "СТК" not in text
+
+
+def test_render_brand_limits_list_empty():
+    assert render_brand_limits_list([]) == "Лимиты пока не заданы."
 
 
 def test_grade_range_is_not_mistaken_for_a_time_range():

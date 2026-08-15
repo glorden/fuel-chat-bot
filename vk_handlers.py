@@ -8,6 +8,8 @@ from db import repo
 from db.schema import get_connection
 from pipeline.pipeline import process_message
 from pipeline.prefilter import is_on_topic
+from pipeline.resolve_station import get_displayed_brand_fuel_limits
+from templates import render_brand_limits_list
 
 log = logging.getLogger("vk_bot")
 
@@ -64,6 +66,12 @@ def _parse_admin_command(text: str) -> bool | None:
     return None
 
 
+def _is_limit_list_command(text: str) -> bool:
+    """"!лимит"/"!лимиты" — доступна всем в чате (в отличие от !вкл/!выкл),
+    голая команда целиком, без хвостов."""
+    return text.strip().lower() in ("!лимит", "!лимиты")
+
+
 async def _mention_tag(bot: Bot, user_id: int) -> str:
     """Тег вида "[id...|Имя], " для явного упоминания адресата в ответе.
     Пустая строка, если user_id — не пользователь (например, сообщение
@@ -92,6 +100,12 @@ def register_handlers(bot: Bot) -> None:
             repo.set_auto_reply_enabled(_conn, enabled=admin_command, changed_by=message.from_id)
             state = "включён" if admin_command else "выключен"
             await message.reply(f"Автоответ на вопросы {state}.")
+            return
+
+        if _is_limit_list_command(own_text):
+            if _can_reply(message.peer_id):
+                _last_reply_at[message.peer_id] = time.monotonic()
+                await message.reply(render_brand_limits_list(get_displayed_brand_fuel_limits()))
             return
 
         quoted_text = _quoted_context_text(message)
