@@ -6,7 +6,7 @@ from config import LLM_ENABLED
 from db import repo
 from pipeline.extract import ExtractResult, extract
 from pipeline.prefilter import is_on_topic
-from pipeline.qa import answer_question
+from pipeline.qa import answer_brand_limit_question, answer_question
 from pipeline.resolve_station import resolve_station
 
 log = logging.getLogger("vk_bot")
@@ -87,6 +87,11 @@ def process_message(
 
     if result.message_type == "question":
         reply_text = answer_question(conn, station_id=station_id, grades=result.question_grades)
+        if reply_text is None and station_id is None:
+            # Бренд назван (РН/ТН/Лукойл), но конкретная точка не резолвится
+            # (несколько точек у бренда) — лимит общий на весь бренд, так что
+            # можно ответить и без резолва станции (см. qa.py).
+            reply_text = answer_brand_limit_question(text)
         return PipelineOutcome("question", reply_text=reply_text)
 
     if text != own_text and own_text and extract(own_text).message_type != "report":

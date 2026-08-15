@@ -7,7 +7,7 @@ from pipeline.extract import ReportItem, extract, resolve_clock_time_to_iso
 from pipeline.facts import MOSCOW_TZ
 from pipeline.pipeline import process_message
 from pipeline.prefilter import is_on_topic
-from pipeline.resolve_station import resolve_station
+from pipeline.resolve_station import get_brand_fuel_limit, resolve_brand, resolve_station
 from tests.fixtures import (
     BREAK_REPORTS,
     GENERIC_AVAILABILITY_NOT_CAPTURED_BY_RULES,
@@ -207,6 +207,24 @@ def test_liters_100_is_not_mistaken_for_grade_100():
     assert result.reports == []
     assert result.limit_info.status == "limited"
     assert result.limit_info.liters == 100
+
+
+def test_resolve_brand_matches_single_unambiguous_brand():
+    assert resolve_brand("Подскажите сколько лимит на Роснефти") == "Роснефть"
+    assert resolve_brand("Татнефть сколько заливают?") == "Татнефть"
+    assert resolve_brand("сколько на лукойле можно залить") == "Лукойл"
+
+
+def test_resolve_brand_none_when_no_brand_or_ambiguous():
+    assert resolve_brand("Есть 95?") is None
+    assert resolve_brand("РН или ТН, у кого лимит меньше?") is None
+
+
+def test_get_brand_fuel_limit_known_and_unknown_brands():
+    assert get_brand_fuel_limit("Роснефть") == 30
+    assert get_brand_fuel_limit("Татнефть") == 50
+    assert get_brand_fuel_limit("Лукойл") == 40
+    assert get_brand_fuel_limit("Опти") is None
 
 
 def test_grade_range_is_not_mistaken_for_a_time_range():
@@ -474,3 +492,33 @@ def test_process_message_writes_pure_limit_report_to_fuel_limit(monkeypatch):
     assert conn.execute("SELECT COUNT(*) FROM fuel_report").fetchone()[0] == 0
     row = conn.execute("SELECT station_id, status, liters FROM fuel_limit").fetchone()
     assert row == ("tatneft_silikatny", "limited", 20)
+
+
+def test_process_message_answers_brand_limit_question_without_station(monkeypatch):
+    # "Подскажите сколько лимит на Роснефти" — реальная формулировка из чата
+    # (см. tests/fixtures.py, QUESTIONS). Роснефть — несколько точек, ни одна
+    # не резолвится без адреса, но лимит общий на бренд (см. gazetteer.yaml).
+    monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
+    conn: sqlite3.Connection = get_connection(":memory:")
+    outcome = process_message(
+        conn, text="Подскажите сколько лимит на Роснефти",
+        peer_id=2000000001, conversation_message_id=1, author_id=111,
+    )
+    assert outcome.label == "question"
+    assert outcome.reply_text == "Роснефть: лимит 30 л в одни руки."
+    # Чисто вопрос про лимит без станции — ничего не пишем в БД.
+    assert conn.execute("SELECT COUNT(*) FROM unresolved_mention").fetchone()[0] == 0
+
+
+def test_process_message_brand_limit_fallback_does_not_override_resolved_station(monkeypatch):
+    # Когда станция резолвится однозначно, брендовый фоллбэк не подменяет
+    # обычный ответ по станции (здесь по станции фактов нет — бот молчит,
+    # как и раньше, а не отвечает лимитом бренда).
+    monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
+    conn: sqlite3.Connection = get_connection(":memory:")
+    outcome = process_message(
+        conn, text="Сколько дают залить на Роснефти Лыжная?",
+        peer_id=2000000001, conversation_message_id=1, author_id=111,
+    )
+    assert outcome.label == "question"
+    assert outcome.reply_text is None

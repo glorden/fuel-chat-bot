@@ -1,10 +1,16 @@
+import re
 import sqlite3
 from datetime import datetime, timezone
 
 from config import FRESH_MINUTES, STALE_MINUTES
 from pipeline.facts import StationBreak, StationFact, StationLimit
-from pipeline.resolve_station import get_station_name
+from pipeline.resolve_station import get_brand_fuel_limit, get_station_name, resolve_brand
 from templates import render_station_answer
+
+_LIMIT_QUESTION_RE = re.compile(
+    r"(?i)\bлимит\w*|\bограничен\w*|\bв\s+одни\s+руки\b"
+    r"|\bсколько\b.{0,25}\b(?:можно|да(?:ют|дут)|зали\w*|нальют|налива\w*|льют|отпуска\w*|отпустят)\b"
+)
 
 
 def _tier_for_age(age_minutes: float) -> str:
@@ -90,6 +96,26 @@ def _latest_limit(conn: sqlite3.Connection, station_id: str) -> StationLimit | N
     status, liters, reported_at = row
     age_minutes = (datetime.now(timezone.utc) - datetime.fromisoformat(reported_at)).total_seconds() / 60
     return StationLimit(status=status, liters=liters, reported_minutes_ago=age_minutes)
+
+
+def answer_brand_limit_question(text: str) -> str | None:
+    """Вопрос про лимит без резолва конкретной станции ("сколько дают на
+    РН?", "Татнефть сколько заливают?" — оба реальные формулировки из
+    чата) — у Роснефти/Татнефти/Лукойла несколько точек, resolve_station()
+    не резолвит голый бренд без адреса ни в одну из них, но лимит общий на
+    весь бренд (см. gazetteer.yaml, brand_fuel_limits), так что резолвить
+    станцию для ответа не нужно. Вызывать только когда обычный
+    answer_question ничего не дал из-за station_id=None — не подменяет
+    ответ по конкретной станции."""
+    if not _LIMIT_QUESTION_RE.search(text):
+        return None
+    brand = resolve_brand(text)
+    if brand is None:
+        return None
+    liters = get_brand_fuel_limit(brand)
+    if liters is None:
+        return None
+    return f"{brand}: лимит {liters} л в одни руки."
 
 
 def answer_question(conn: sqlite3.Connection, *, station_id: str | None, grades: list[str]) -> str | None:

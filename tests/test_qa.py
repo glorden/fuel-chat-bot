@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from db.schema import get_connection
 from pipeline.facts import MOSCOW_TZ
-from pipeline.qa import answer_question
+from pipeline.qa import answer_brand_limit_question, answer_question
 
 
 def _insert_report(
@@ -232,3 +232,30 @@ def test_answer_question_uses_latest_limit_not_older_one():
     text = answer_question(conn, station_id="lukoil_vilga", grades=[])
     assert "лимита нет" in text
     assert "лимит 20 л" not in text
+
+
+def test_answer_brand_limit_question_real_chat_phrasings():
+    # "Подскажите сколько лимит на Роснефти" и "Татнефть сколько заливают?" —
+    # обе реальные формулировки из чата (см. tests/fixtures.py, QUESTIONS и
+    # комментарий к LIMIT_REPORTS).
+    assert answer_brand_limit_question("Подскажите сколько лимит на Роснефти") == "Роснефть: лимит 30 л в одни руки."
+    assert answer_brand_limit_question("Татнефть сколько заливают?") == "Татнефть: лимит 50 л в одни руки."
+
+
+def test_answer_brand_limit_question_matches_user_example_phrasings():
+    assert answer_brand_limit_question("сколько дают залить на рн?") == "Роснефть: лимит 30 л в одни руки."
+    assert answer_brand_limit_question("на лукойле сколько можно?") == "Лукойл: лимит 40 л в одни руки."
+    assert answer_brand_limit_question("на тн сколько отпускают?") == "Татнефть: лимит 50 л в одни руки."
+
+
+def test_answer_brand_limit_question_none_without_limit_keyword():
+    # Обычный вопрос про наличие бренда без слов про лимит — не должен
+    # подхватываться этим фоллбэком (иначе увёл бы от молчания к нерелевантному
+    # ответу вместо честного "не знаем, какая точка").
+    assert answer_brand_limit_question("Есть 95 на Роснефти?") is None
+
+
+def test_answer_brand_limit_question_none_for_unknown_or_ambiguous_brand():
+    assert answer_brand_limit_question("сколько лимит на Опти?") is None  # бренд известен, лимит — нет
+    assert answer_brand_limit_question("РН или ТН, у кого лимит меньше?") is None  # два бренда сразу
+    assert answer_brand_limit_question("какой тут лимит?") is None  # бренд вообще не назван
