@@ -7,10 +7,12 @@ from vkbottle.bot import Bot, Message
 
 from config import ADMIN_ID, ALLOWED_PEER_IDS, AUTO_REPLY_ON_QUESTION, GROUP_ID, MIN_REPLY_GAP_SECONDS
 from db import repo
+from db.retention import apply_retention
 from db.schema import get_connection
 from pipeline.pipeline import process_message
 from pipeline.prefilter import is_on_topic
 from pipeline.resolve_station import get_displayed_brand_fuel_limits
+from privacy import author_fingerprint
 from templates import render_brand_limits_list
 
 log = logging.getLogger("vk_bot")
@@ -48,6 +50,9 @@ _unknown_peers_logged: set[int] = set()
 
 # Алерты владельцу: не чаще одного в 10 минут, чтобы повторяющийся сбой не
 # превратился в поток сообщений в личку.
+_RETENTION_INTERVAL_SECONDS = 3600
+_last_retention_at = float("-inf")
+
 _ALERT_MIN_GAP_SECONDS = 600
 # -inf, а не 0: time.monotonic() на Linux — это аптайм, и с нуля первые
 # 10 минут после перезагрузки хоста алерты бы молча глушились.
@@ -239,6 +244,23 @@ async def _alert_owner(bot: Bot, summary: str) -> None:
         log.error("Не удалось отправить алерт владельцу", exc_info=True)
 
 
+def run_retention_if_due(*, force: bool = False) -> None:
+    """Ретенция (решение Р7) без отдельного планировщика: раз в час на живом
+    трафике плюс один прогон на старте. Своего шедулера в проекте нет, а
+    заводить его ради одной уборки — лишняя подсистема; если трафика нет,
+    то и новых данных, которым нужно истекать, тоже нет.
+
+    Уборка не должна ронять обработку сообщения: её сбой — строка в логе."""
+    global _last_retention_at
+    if not force and time.monotonic() - _last_retention_at < _RETENTION_INTERVAL_SECONDS:
+        return
+    _last_retention_at = time.monotonic()
+    try:
+        apply_retention(_conn)
+    except Exception:
+        log.exception("Ретенция не отработала")
+
+
 def _mark_processed(peer_id: int, conversation_message_id: int) -> None:
     """Отметка для путей, которые не доходят до пайплайна (команды в чате):
     там её некому поставить, а дедуп нужен и им."""
@@ -259,6 +281,8 @@ async def handle_message(bot: Bot, message: Message) -> None:
         return
     if repo.already_processed(_conn, message.peer_id, message.conversation_message_id):
         return
+
+    run_retention_if_due()
 
     # Отметка "обработано" ставится ПОСЛЕ обработки, а не до (находка G1:
     # раньше любое исключение означало, что сообщение и не обработано, и
@@ -304,9 +328,15 @@ async def handle_message(bot: Bot, message: Message) -> None:
         author_id=message.from_id,
         reported_at=_message_time(message),
     )
+    # Ни текста сообщения, ни VK-идентификатора: раньше эта строка писала
+    # на КАЖДОЕ сообщение полный текст, процитированный текст и from_id —
+    # на уровне INFO, то есть в обычном режиме (находка F4). Для разбора
+    # инцидентов хватает исхода, длины и того, был ли контекст; отличить
+    # одного автора от другого позволяет отпечаток.
     log.info(
-        "peer_id=%s from_id=%s outcome=%s own_text=%r quoted=%r prev_msg=%r",
-        message.peer_id, message.from_id, outcome.label, own_text, quoted_text or None, previous_message,
+        "peer_id=%s author=%s outcome=%s len=%s quoted=%s prev=%s",
+        message.peer_id, author_fingerprint(message.from_id)[:8], outcome.label,
+        len(own_text), bool(quoted_text), bool(previous_message),
     )
 
     reply_text = outcome.reply_text if outcome.label == "question" else None

@@ -37,6 +37,20 @@ FRESH_MINUTES = int(os.environ.get("FRESH_MINUTES", "240"))
 STALE_MINUTES = int(os.environ.get("STALE_MINUTES", "480"))
 MIN_REPLY_GAP_SECONDS = int(os.environ.get("MIN_REPLY_GAP_SECONDS", "5"))
 
+# Сроки жизни данных участников (решение Р7). Сам факт — станция, марка,
+# статус, время — живёт вечно; истекают только сырой текст сообщения и
+# идентификаторы. Дедуп старше своего срока не нужен вообще: он существует
+# ради недавних сообщений.
+RAW_TEXT_TTL_DAYS = int(os.environ.get("RAW_TEXT_TTL_DAYS", "30"))
+PROCESSED_MESSAGE_TTL_DAYS = int(os.environ.get("PROCESSED_MESSAGE_TTL_DAYS", "7"))
+
+# Ключ для отпечатка автора. Отдельной переменной обычно нет — тогда берём
+# токен сообщества: он уже секретный, стабильный между рестартами и никуда
+# не уезжает с сервера. Ротация токена сменит отпечатки, но их всё равно
+# никто не читает — они нужны только чтобы отличать «тот же автор» от
+# «другой», не зная, кто это.
+AUTHOR_HASH_SECRET = os.environ.get("AUTHOR_HASH_SECRET") or VK_TOKEN
+
 LLM_ENABLED = os.environ.get("LLM_ENABLED", "false").lower() == "true"
 LLM_TIMEOUT_SECONDS = int(os.environ.get("LLM_TIMEOUT_SECONDS", "10"))
 

@@ -63,7 +63,7 @@ def raw_analyze(
         )
         tool_calls = response.choices[0].message.tool_calls
         if not tool_calls:
-            log.warning("Mistral: ответ без tool call, откат на rule-based. text=%r", text)
+            log.warning("Mistral: ответ без tool call, откат на rule-based. len=%s", len(text))
             return None
 
         arguments = tool_calls[0].function.arguments
@@ -75,5 +75,5 @@ def raw_analyze(
             return json.loads(arguments)
         return arguments
     except Exception:
-        log.exception("Mistral: сбой запроса, откат на rule-based. text=%r", text)
+        log.exception("Mistral: сбой запроса, откат на rule-based. len=%s", len(text))
         return None

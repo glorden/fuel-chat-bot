@@ -11,6 +11,7 @@ from pipeline.extract import ExtractResult, extract
 from pipeline.prefilter import is_on_topic
 from pipeline.qa import answer_brand_limit_question, answer_question
 from pipeline.resolve_station import resolve_station
+from privacy import author_fingerprint
 
 log = logging.getLogger("vk_bot")
 
@@ -146,6 +147,9 @@ def _record(
     """Всё, что пишется по итогам разбора. Вызывается внутри транзакции —
     сам не коммитит и не открывает свою."""
     result, station_id = analysis.result, analysis.station_id
+    # Числовой id автора дальше этой функции не уходит: в БД пишется только
+    # отпечаток (решение Р7).
+    author_hash = author_fingerprint(author_id)
     if result.message_type == "irrelevant":
         return PipelineOutcome("irrelevant")
 
@@ -192,7 +196,7 @@ def _record(
             conn,
             peer_id=peer_id,
             conversation_message_id=conversation_message_id,
-            author_id=author_id,
+            author_hash=author_hash,
             seen_at=reported_at,
             raw_text=text,
         )
@@ -206,7 +210,7 @@ def _record(
             queue=result.queue,
             peer_id=peer_id,
             conversation_message_id=conversation_message_id,
-            author_id=author_id,
+            author_hash=author_hash,
             reported_at=reported_at,
             source=analysis.source,
             raw_text=text,
@@ -219,7 +223,7 @@ def _record(
             break_info=result.break_info,
             peer_id=peer_id,
             conversation_message_id=conversation_message_id,
-            author_id=author_id,
+            author_hash=author_hash,
             reported_at=reported_at,
             source=analysis.source,
             raw_text=text,
@@ -232,7 +236,7 @@ def _record(
             limit_info=result.limit_info,
             peer_id=peer_id,
             conversation_message_id=conversation_message_id,
-            author_id=author_id,
+            author_hash=author_hash,
             reported_at=reported_at,
             source=analysis.source,
             raw_text=text,

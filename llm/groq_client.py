@@ -60,10 +60,10 @@ def raw_analyze(
         )
         tool_calls = response.choices[0].message.tool_calls
         if not tool_calls:
-            log.warning("Groq: ответ без tool call, откат на rule-based. text=%r", text)
+            log.warning("Groq: ответ без tool call, откат на rule-based. len=%s", len(text))
             return None
 
         return json.loads(tool_calls[0].function.arguments)
     except Exception:
-        log.exception("Groq: сбой запроса, откат на rule-based. text=%r", text)
+        log.exception("Groq: сбой запроса, откат на rule-based. len=%s", len(text))
         return None

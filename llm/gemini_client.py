@@ -87,11 +87,11 @@ def raw_analyze(
         )
         calls = response.function_calls
         if not calls:
-            log.warning("Gemini: ответ без function call, откат на rule-based. text=%r", text)
+            log.warning("Gemini: ответ без function call, откат на rule-based. len=%s", len(text))
             return None
         raw = calls[0].args
     except Exception:
-        log.exception("Gemini: сбой запроса, откат на rule-based. text=%r", text)
+        log.exception("Gemini: сбой запроса, откат на rule-based. len=%s", len(text))
         return None
 
     if not isinstance(raw, dict):

@@ -39,7 +39,7 @@ def insert_fuel_report(
     queue: QueueInfo | None,
     peer_id: int,
     conversation_message_id: int,
-    author_id: int,
+    author_hash: str,
     reported_at: datetime,
     source: str,
     raw_text: str,
@@ -50,7 +50,7 @@ def insert_fuel_report(
         "INSERT INTO fuel_report "
         "(station_id, fuel_grade, status, queue_status, queue_minutes, queue_cars_from, "
         " queue_cars_to, peer_id, conversation_message_id, "
-        " author_id, reported_at, raw_text, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " author_id, author_hash, reported_at, raw_text, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
         (
             station_id,
             report.grade,
@@ -61,7 +61,7 @@ def insert_fuel_report(
             queue.cars_to if queue else None,
             peer_id,
             conversation_message_id,
-            author_id,
+            author_hash,
             reported_at.isoformat(),
             raw_text,
             source,
@@ -76,7 +76,7 @@ def insert_station_break(
     break_info: BreakInfo,
     peer_id: int,
     conversation_message_id: int,
-    author_id: int,
+    author_hash: str,
     reported_at: datetime,
     source: str,
     raw_text: str,
@@ -84,7 +84,7 @@ def insert_station_break(
     conn.execute(
         "INSERT INTO station_break "
         "(station_id, kind, until, duration_note, peer_id, conversation_message_id, "
-        " author_id, reported_at, raw_text, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " author_id, author_hash, reported_at, raw_text, source) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
         (
             station_id,
             break_info.kind,
@@ -92,7 +92,7 @@ def insert_station_break(
             break_info.duration_note,
             peer_id,
             conversation_message_id,
-            author_id,
+            author_hash,
             reported_at.isoformat(),
             raw_text,
             source,
@@ -107,7 +107,7 @@ def insert_fuel_limit(
     limit_info: LimitInfo,
     peer_id: int,
     conversation_message_id: int,
-    author_id: int,
+    author_hash: str,
     reported_at: datetime,
     source: str,
     raw_text: str,
@@ -115,14 +115,14 @@ def insert_fuel_limit(
     conn.execute(
         "INSERT INTO fuel_limit "
         "(station_id, status, liters, peer_id, conversation_message_id, "
-        " author_id, reported_at, raw_text, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " author_id, author_hash, reported_at, raw_text, source) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
         (
             station_id,
             limit_info.status,
             limit_info.liters,
             peer_id,
             conversation_message_id,
-            author_id,
+            author_hash,
             reported_at.isoformat(),
             raw_text,
             source,
@@ -153,12 +153,12 @@ def insert_unresolved_mention(
     *,
     peer_id: int,
     conversation_message_id: int,
-    author_id: int,
+    author_hash: str,
     seen_at: datetime,
     raw_text: str,
 ) -> None:
     conn.execute(
         "INSERT INTO unresolved_mention "
-        "(peer_id, conversation_message_id, author_id, seen_at, raw_text) VALUES (?, ?, ?, ?, ?)",
-        (peer_id, conversation_message_id, author_id, seen_at.isoformat(), raw_text),
+        "(peer_id, conversation_message_id, author_id, author_hash, seen_at, raw_text) VALUES (?, ?, 0, ?, ?, ?)",
+        (peer_id, conversation_message_id, author_hash, seen_at.isoformat(), raw_text),
     )

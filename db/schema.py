@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS fuel_report (
     author_id INTEGER NOT NULL,
     reported_at TEXT NOT NULL,
     raw_text TEXT NOT NULL,
-    source TEXT
+    source TEXT,
+    author_hash TEXT
 );
 
 CREATE TABLE IF NOT EXISTS unresolved_mention (
@@ -40,7 +41,8 @@ CREATE TABLE IF NOT EXISTS unresolved_mention (
     conversation_message_id INTEGER NOT NULL,
     author_id INTEGER NOT NULL,
     seen_at TEXT NOT NULL,
-    raw_text TEXT NOT NULL
+    raw_text TEXT NOT NULL,
+    author_hash TEXT
 );
 
 CREATE TABLE IF NOT EXISTS station_break (
@@ -54,7 +56,8 @@ CREATE TABLE IF NOT EXISTS station_break (
     author_id INTEGER NOT NULL,
     reported_at TEXT NOT NULL,
     raw_text TEXT NOT NULL,
-    source TEXT
+    source TEXT,
+    author_hash TEXT
 );
 
 CREATE TABLE IF NOT EXISTS fuel_limit (
@@ -67,7 +70,8 @@ CREATE TABLE IF NOT EXISTS fuel_limit (
     author_id INTEGER NOT NULL,
     reported_at TEXT NOT NULL,
     raw_text TEXT NOT NULL,
-    source TEXT
+    source TEXT,
+    author_hash TEXT
 );
 
 -- Append-only, как station_break/fuel_limit: текущее значение — последняя
@@ -102,6 +106,12 @@ _ADDED_COLUMNS = {
     "station_break": {"source": "TEXT"},
     "fuel_limit": {"source": "TEXT"},
 }
+
+# Отпечаток автора вместо его VK-идентификатора (решение Р7). Добавляется
+# во все четыре таблицы, где раньше бессрочно лежал числовой id реального
+# человека; сам author_id у новых строк пишется нулём.
+for _table in ("fuel_report", "station_break", "fuel_limit", "unresolved_mention"):
+    _ADDED_COLUMNS.setdefault(_table, {})["author_hash"] = "TEXT"
 
 
 def _add_missing_columns(conn: sqlite3.Connection) -> None:
