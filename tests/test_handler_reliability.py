@@ -8,7 +8,6 @@ ARCH_DECISIONS.md, решения Р6 и Р8).
 """
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 from vkbottle.bot import Bot
@@ -16,61 +15,8 @@ from vkbottle.bot import Bot
 import pipeline.pipeline as pipeline_module
 import vk_handlers
 from db.schema import get_connection
+from tests.vk_fakes import FakeBot, FakeVkMessage
 from vk_handlers import register_handlers
-
-
-class _FakeUsers:
-    def __init__(self, api):
-        self._api = api
-
-    async def get(self, user_ids):
-        if self._api.users_get_error is not None:
-            raise self._api.users_get_error
-        return [SimpleNamespace(first_name="Мария")]
-
-
-class _FakeMessages:
-    def __init__(self, api):
-        self._api = api
-
-    async def send(self, **kwargs):
-        if self._api.send_error is not None:
-            raise self._api.send_error
-        self._api.sent.append(kwargs)
-        return 1
-
-
-class _FakeApi:
-    def __init__(self):
-        self.users_get_error = None
-        self.send_error = None
-        self.sent = []
-        self.users = _FakeUsers(self)
-        self.messages = _FakeMessages(self)
-
-
-class _FakeBot:
-    def __init__(self):
-        self.api = _FakeApi()
-
-
-class _FakeVkMessage:
-    def __init__(self, *, peer_id=2000000001, text="", from_id=111, cmid=1, is_mentioned=True):
-        self.peer_id = peer_id
-        self.text = text
-        self.from_id = from_id
-        self.conversation_message_id = cmid
-        self.is_mentioned = is_mentioned
-        self.fwd_messages = []
-        self.reply_message = None
-        self.replies = []
-        self.reply_failures = 0
-
-    async def reply(self, text):
-        if self.reply_failures > 0:
-            self.reply_failures -= 1
-            raise RuntimeError("VK недоступен")
-        self.replies.append(text)
 
 
 @pytest.fixture
@@ -83,7 +29,7 @@ def env(monkeypatch):
     monkeypatch.setattr(vk_handlers, "_last_alert_at", float("-inf"))
     monkeypatch.setattr(vk_handlers, "_last_reply_at", {})
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
-    return conn, _FakeBot()
+    return conn, FakeBot()
 
 
 def _handler_with_catch(bot):
@@ -100,7 +46,7 @@ def _handler_with_catch(bot):
 
 
 def _seed_fact(conn, bot):
-    asyncio.run(vk_handlers.handle_message(bot, _FakeVkMessage(text="Лукойл Вилга только 92 на табло", cmid=1)))
+    asyncio.run(vk_handlers.handle_message(bot, FakeVkMessage(text="Лукойл Вилга только 92 на табло", cmid=1)))
     assert conn.execute("SELECT COUNT(*) FROM fuel_report").fetchone()[0] == 1
 
 
@@ -115,7 +61,7 @@ def test_users_get_failure_does_not_destroy_the_computed_answer(env):
     _seed_fact(conn, bot)
     bot.api.users_get_error = RuntimeError("VK API error 6")
 
-    question = _FakeVkMessage(text="Есть 92 в вилге?", cmid=2)
+    question = FakeVkMessage(text="Есть 92 в вилге?", cmid=2)
     asyncio.run(vk_handlers.handle_message(bot, question))
 
     assert len(question.replies) == 1
@@ -127,12 +73,12 @@ def test_reply_is_retried_once_before_giving_up(env):
     conn, bot = env
     _seed_fact(conn, bot)
 
-    question = _FakeVkMessage(text="Есть 92 в вилге?", cmid=2)
+    question = FakeVkMessage(text="Есть 92 в вилге?", cmid=2)
     question.reply_failures = 1
     asyncio.run(vk_handlers.handle_message(bot, question))
     assert len(question.replies) == 1
 
-    question2 = _FakeVkMessage(text="Есть 92 в вилге?", cmid=3)
+    question2 = FakeVkMessage(text="Есть 92 в вилге?", cmid=3)
     question2.reply_failures = 2  # обе попытки мимо
     asyncio.run(vk_handlers.handle_message(bot, question2))
     assert question2.replies == []
@@ -145,7 +91,7 @@ def test_failed_message_is_not_marked_processed(env, monkeypatch):
     conn, bot = env
     monkeypatch.setattr(vk_handlers, "process_message", _boom)
     with pytest.raises(RuntimeError):
-        asyncio.run(vk_handlers.handle_message(bot, _FakeVkMessage(text="Вилга 92 есть", cmid=7)))
+        asyncio.run(vk_handlers.handle_message(bot, FakeVkMessage(text="Вилга 92 есть", cmid=7)))
 
     assert conn.execute("SELECT COUNT(*) FROM processed_message").fetchone()[0] == 0
     assert vk_handlers.repo.already_processed(conn, 2000000001, 7) is False
@@ -158,7 +104,7 @@ def test_partial_write_is_rolled_back_whole(env, monkeypatch):
     monkeypatch.setattr(vk_handlers.repo, "insert_station_break", _boom)
     with pytest.raises(RuntimeError):
         asyncio.run(vk_handlers.handle_message(
-            bot, _FakeVkMessage(text="Слив бензовоза на Лукойле Вилга, 92 есть", cmid=8)
+            bot, FakeVkMessage(text="Слив бензовоза на Лукойле Вилга, 92 есть", cmid=8)
         ))
 
     # Ни отчёта по марке (он пишется раньше перерыва), ни перерыва, ни отметки.
@@ -173,19 +119,19 @@ def test_successful_message_is_marked_processed_and_deduped(env):
     assert conn.execute("SELECT COUNT(*) FROM processed_message").fetchone()[0] == 1
 
     # Повторная доставка того же сообщения не пишет второй факт.
-    asyncio.run(vk_handlers.handle_message(bot, _FakeVkMessage(text="Лукойл Вилга только 92 на табло", cmid=1)))
+    asyncio.run(vk_handlers.handle_message(bot, FakeVkMessage(text="Лукойл Вилга только 92 на табло", cmid=1)))
     assert conn.execute("SELECT COUNT(*) FROM fuel_report").fetchone()[0] == 1
 
 
 def test_off_topic_message_is_marked_processed(env):
     conn, bot = env
-    asyncio.run(vk_handlers.handle_message(bot, _FakeVkMessage(text="всем доброе утро", cmid=4)))
+    asyncio.run(vk_handlers.handle_message(bot, FakeVkMessage(text="всем доброе утро", cmid=4)))
     assert conn.execute("SELECT COUNT(*) FROM processed_message").fetchone()[0] == 1
 
 
 def test_chat_command_is_marked_processed_too(env):
     conn, bot = env
-    command = _FakeVkMessage(text="!лимит", cmid=5)
+    command = FakeVkMessage(text="!лимит", cmid=5)
     asyncio.run(vk_handlers.handle_message(bot, command))
     assert len(command.replies) == 1
     assert conn.execute("SELECT COUNT(*) FROM processed_message").fetchone()[0] == 1
@@ -198,7 +144,7 @@ def test_unhandled_error_alerts_the_owner_once_per_window(env, monkeypatch):
     monkeypatch.setattr(vk_handlers, "process_message", _boom)
     handler = _handler_with_catch(bot)
 
-    asyncio.run(handler(_FakeVkMessage(text="Вилга 92 есть", cmid=11)))
+    asyncio.run(handler(FakeVkMessage(text="Вилга 92 есть", cmid=11)))
     assert len(bot.api.sent) == 1
     alert = bot.api.sent[0]
     assert alert["user_id"] == 3022748
@@ -207,7 +153,7 @@ def test_unhandled_error_alerts_the_owner_once_per_window(env, monkeypatch):
     # Текста участника в алерте нет — только беседа, номер сообщения и тип.
     assert "Вилга 92 есть" not in alert["message"]
 
-    asyncio.run(handler(_FakeVkMessage(text="Вилга 95 есть", cmid=12)))
+    asyncio.run(handler(FakeVkMessage(text="Вилга 95 есть", cmid=12)))
     assert len(bot.api.sent) == 1  # окно в 10 минут ещё не прошло
 
 
@@ -219,7 +165,7 @@ def test_alert_delivery_failure_does_not_break_anything(env, monkeypatch):
     monkeypatch.setattr(vk_handlers, "process_message", _boom)
     handler = _handler_with_catch(bot)
 
-    asyncio.run(handler(_FakeVkMessage(text="Вилга 92 есть", cmid=13)))  # наружу не бросает
+    asyncio.run(handler(FakeVkMessage(text="Вилга 92 есть", cmid=13)))  # наружу не бросает
     assert bot.api.sent == []
 
 
@@ -230,9 +176,9 @@ def test_handler_catches_errors_so_one_bad_message_does_not_stop_the_bot(env, mo
     original_process_message = vk_handlers.process_message
     monkeypatch.setattr(vk_handlers, "process_message", _boom)
     handler = _handler_with_catch(bot)
-    asyncio.run(handler(_FakeVkMessage(text="Вилга 92 есть", cmid=14)))
+    asyncio.run(handler(FakeVkMessage(text="Вилга 92 есть", cmid=14)))
 
     # Следующее сообщение обрабатывается как ни в чём не бывало.
     monkeypatch.setattr(vk_handlers, "process_message", original_process_message)
-    asyncio.run(handler(_FakeVkMessage(text="Лукойл Вилга только 92 на табло", cmid=15)))
+    asyncio.run(handler(FakeVkMessage(text="Лукойл Вилга только 92 на табло", cmid=15)))
     assert conn.execute("SELECT COUNT(*) FROM fuel_report").fetchone()[0] == 1

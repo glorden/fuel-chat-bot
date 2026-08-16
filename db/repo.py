@@ -40,6 +40,7 @@ def insert_fuel_report(
     peer_id: int,
     conversation_message_id: int,
     author_id: int,
+    reported_at: datetime,
     raw_text: str,
 ) -> None:
     """Легаси-колонка `queue_note` намеренно не заполняется: свободного
@@ -60,7 +61,7 @@ def insert_fuel_report(
             peer_id,
             conversation_message_id,
             author_id,
-            datetime.now(timezone.utc).isoformat(),
+            reported_at.isoformat(),
             raw_text,
         ),
     )
@@ -74,6 +75,7 @@ def insert_station_break(
     peer_id: int,
     conversation_message_id: int,
     author_id: int,
+    reported_at: datetime,
     raw_text: str,
 ) -> None:
     conn.execute(
@@ -88,7 +90,7 @@ def insert_station_break(
             peer_id,
             conversation_message_id,
             author_id,
-            datetime.now(timezone.utc).isoformat(),
+            reported_at.isoformat(),
             raw_text,
         ),
     )
@@ -102,6 +104,7 @@ def insert_fuel_limit(
     peer_id: int,
     conversation_message_id: int,
     author_id: int,
+    reported_at: datetime,
     raw_text: str,
 ) -> None:
     conn.execute(
@@ -115,7 +118,7 @@ def insert_fuel_limit(
             peer_id,
             conversation_message_id,
             author_id,
-            datetime.now(timezone.utc).isoformat(),
+            reported_at.isoformat(),
             raw_text,
         ),
     )
@@ -145,10 +148,11 @@ def insert_unresolved_mention(
     peer_id: int,
     conversation_message_id: int,
     author_id: int,
+    seen_at: datetime,
     raw_text: str,
 ) -> None:
     conn.execute(
         "INSERT INTO unresolved_mention "
         "(peer_id, conversation_message_id, author_id, seen_at, raw_text) VALUES (?, ?, ?, ?, ?)",
-        (peer_id, conversation_message_id, author_id, datetime.now(timezone.utc).isoformat(), raw_text),
+        (peer_id, conversation_message_id, author_id, seen_at.isoformat(), raw_text),
     )

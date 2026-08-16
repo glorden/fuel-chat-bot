@@ -1,3 +1,4 @@
+import asyncio
 import llm.client
 import pipeline.pipeline as pipeline_module
 from db.schema import get_connection
@@ -21,9 +22,9 @@ def test_uses_llm_result_when_available(monkeypatch):
     # Текст проходит pre-filter (слово "азс"), но сам по себе rule-based
     # extract() не нашёл бы в нём ни одной марки топлива — если результат
     # всё равно попал в fuel_report, значит использован именно LLM-результат.
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn, text="азс, всё как обычно", peer_id=1, conversation_message_id=1, author_id=1,
-    )
+    ))
     assert outcome.label == "report:rosneft_lesnoy_79"
     row = conn.execute("SELECT station_id, fuel_grade, status FROM fuel_report").fetchone()
     assert row == ("rosneft_lesnoy_79", "95", "available")
@@ -34,10 +35,10 @@ def test_falls_back_to_rule_based_when_llm_returns_none(monkeypatch):
     monkeypatch.setattr(llm.client, "analyze", lambda text, previous_message=None, quoted_context=None: None)
     conn = get_connection(":memory:")
 
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn, text="РН лесной, 95 есть на 4,5 колонке. Очередь.",
         peer_id=1, conversation_message_id=1, author_id=1,
-    )
+    ))
     assert outcome.label == "report:rosneft_lesnoy_79"
 
 
@@ -50,10 +51,10 @@ def test_llm_disabled_never_calls_llm_client(monkeypatch):
     monkeypatch.setattr(llm.client, "analyze", _boom)
     conn = get_connection(":memory:")
 
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn, text="Татнефть силикатный только дт",
         peer_id=1, conversation_message_id=1, author_id=1,
-    )
+    ))
     assert outcome.label == "report:tatneft_silikatny"
 
 
@@ -75,10 +76,10 @@ def test_previous_message_threaded_to_llm_analyze(monkeypatch):
     monkeypatch.setattr(llm.client, "analyze", _fake_analyze)
     conn = get_connection(":memory:")
 
-    process_message(
+    asyncio.run(process_message(
         conn, text="большая очередь?", previous_message="95 есть на Газпроме?",
         peer_id=1, conversation_message_id=1, author_id=1,
-    )
+    ))
     assert received["text"] == "большая очередь?"
     assert received["previous_message"] == "95 есть на Газпроме?"
     assert received["quoted_context"] is None
@@ -103,13 +104,13 @@ def test_quoted_context_threaded_separately_from_combined_text(monkeypatch):
     monkeypatch.setattr(llm.client, "analyze", _fake_analyze)
     conn = get_connection(":memory:")
 
-    process_message(
+    asyncio.run(process_message(
         conn,
         text="А Татнефть на Шуйском есть 95?\nДа",
         own_text="Да",
         quoted_context="А Татнефть на Шуйском есть 95?",
         peer_id=1, conversation_message_id=1, author_id=1,
-    )
+    ))
     assert received["text"] == "Да"
     assert received["quoted_context"] == "А Татнефть на Шуйском есть 95?"
 
@@ -120,11 +121,11 @@ def test_rule_based_still_gets_combined_text_when_llm_disabled(monkeypatch):
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
     conn = get_connection(":memory:")
 
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn,
         text="95 нет на Лукойле Вилга\nа очередь есть?",
         own_text="а очередь есть?",
         quoted_context="95 нет на Лукойле Вилга",
         peer_id=1, conversation_message_id=1, author_id=1,
-    )
+    ))
     assert outcome.label == "question"

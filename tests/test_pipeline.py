@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 from datetime import datetime, timezone
 
@@ -404,36 +405,36 @@ def test_process_message_end_to_end_against_temp_db(monkeypatch):
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
     conn: sqlite3.Connection = get_connection(":memory:")
 
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn, text="РН лесной, 95 есть на 4,5 колонке. Очередь.",
         peer_id=2000000001, conversation_message_id=1, author_id=111,
-    )
+    ))
     assert outcome.label == "report:rosneft_lesnoy_79"
     row = conn.execute("SELECT station_id, fuel_grade, status, queue_status FROM fuel_report").fetchone()
     assert row == ("rosneft_lesnoy_79", "95", "available", "present")
 
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn, text="Заправился в Пряже, 92 есть",
         peer_id=2000000001, conversation_message_id=2, author_id=112,
-    )
+    ))
     assert outcome.label == "unresolved"
     row = conn.execute("SELECT raw_text FROM unresolved_mention").fetchone()
     assert row[0].startswith("Заправился в Пряже")
 
     # Вопрос по станции, для которой только что записали свежий отчёт —
     # должен вернуться содержательный reply_text, а не просто ярлык.
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn, text="РН лесной 95 есть?",
         peer_id=2000000001, conversation_message_id=3, author_id=113,
-    )
+    ))
     assert outcome.label == "question"
     assert "95" in outcome.reply_text
     assert "есть" in outcome.reply_text
 
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn, text="Спасибо",
         peer_id=2000000001, conversation_message_id=4, author_id=111,
-    )
+    ))
     assert outcome.label == "off_topic"
 
 
@@ -445,10 +446,10 @@ def test_process_message_writes_report_from_pure_quote_when_own_text_empty(monke
     # через rule-based, а не через живой LLM-ответ.
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
     conn: sqlite3.Connection = get_connection(":memory:")
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn, text="РН лесной, 95 есть на 4,5 колонке. Очередь.", own_text="",
         peer_id=2000000001, conversation_message_id=1, author_id=111,
-    )
+    ))
     assert outcome.label == "report:rosneft_lesnoy_79"
     row = conn.execute("SELECT raw_text FROM fuel_report").fetchone()
     assert row[0] == "РН лесной, 95 есть на 4,5 колонке. Очередь."
@@ -460,12 +461,12 @@ def test_process_message_suppresses_report_when_own_text_has_no_signal(monkeypat
     # реплай искусственно освежил бы старый факт под новым timestamp.
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
     conn: sqlite3.Connection = get_connection(":memory:")
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn,
         text="РН лесной, 95 есть на 4,5 колонке. Очередь.\nСпасибо",
         own_text="Спасибо",
         peer_id=2000000001, conversation_message_id=1, author_id=111,
-    )
+    ))
     assert outcome.label == "report_suppressed_quote_only"
     assert conn.execute("SELECT COUNT(*) FROM fuel_report").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM unresolved_mention").fetchone()[0] == 0
@@ -478,12 +479,12 @@ def test_process_message_writes_report_when_own_text_has_its_own_signal(monkeypa
     # со станцией из own_text.
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
     conn: sqlite3.Connection = get_connection(":memory:")
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn,
         text="кто-то писал в чат\nРН лесной, 95 есть на 4,5 колонке. Очередь.",
         own_text="РН лесной, 95 есть на 4,5 колонке. Очередь.",
         peer_id=2000000001, conversation_message_id=1, author_id=111,
-    )
+    ))
     assert outcome.label == "report:rosneft_lesnoy_79"
     row = conn.execute("SELECT fuel_grade, status, queue_status FROM fuel_report").fetchone()
     assert row == ("95", "available", "present")
@@ -495,17 +496,17 @@ def test_process_message_question_resolves_station_from_quoted_report(monkeypatc
     # при чём (сработал бы только для message_type == "report").
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
     conn: sqlite3.Connection = get_connection(":memory:")
-    _seed = process_message(
+    _seed = asyncio.run(process_message(
         conn, text="95 нет на Лукойле Вилга", peer_id=2000000001, conversation_message_id=1, author_id=111,
-    )
+    ))
     assert _seed.label.startswith("report:")
 
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn,
         text="95 нет на Лукойле Вилга\nа очередь есть?",
         own_text="а очередь есть?",
         peer_id=2000000001, conversation_message_id=2, author_id=222,
-    )
+    ))
     assert outcome.label == "question"
     assert outcome.reply_text is not None
     assert "95" in outcome.reply_text
@@ -514,10 +515,10 @@ def test_process_message_question_resolves_station_from_quoted_report(monkeypatc
 def test_process_message_writes_pure_break_report_to_station_break(monkeypatch):
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
     conn: sqlite3.Connection = get_connection(":memory:")
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn, text="Слив бензовоза на Лукойле Вилга, минут 40",
         peer_id=2000000001, conversation_message_id=1, author_id=111,
-    )
+    ))
     assert outcome.label == "report:lukoil_vilga"
     # Чистый перерыв без марки — fuel_report пуст, station_break заполнен.
     assert conn.execute("SELECT COUNT(*) FROM fuel_report").fetchone()[0] == 0
@@ -528,10 +529,10 @@ def test_process_message_writes_pure_break_report_to_station_break(monkeypatch):
 def test_process_message_writes_break_and_report_together(monkeypatch):
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
     conn: sqlite3.Connection = get_connection(":memory:")
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn, text="Слив бензовоза на Татнефть Силикатный, есть 92, нет 95",
         peer_id=2000000001, conversation_message_id=1, author_id=111,
-    )
+    ))
     assert outcome.label == "report:tatneft_silikatny"
     assert conn.execute("SELECT COUNT(*) FROM fuel_report").fetchone()[0] == 2
     assert conn.execute("SELECT COUNT(*) FROM station_break").fetchone()[0] == 1
@@ -540,10 +541,10 @@ def test_process_message_writes_break_and_report_together(monkeypatch):
 def test_process_message_writes_pure_limit_report_to_fuel_limit(monkeypatch):
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
     conn: sqlite3.Connection = get_connection(":memory:")
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn, text="Татнефть силикатный, лимит 20 л",
         peer_id=2000000001, conversation_message_id=1, author_id=111,
-    )
+    ))
     assert outcome.label == "report:tatneft_silikatny"
     assert conn.execute("SELECT COUNT(*) FROM fuel_report").fetchone()[0] == 0
     row = conn.execute("SELECT station_id, status, liters FROM fuel_limit").fetchone()
@@ -556,10 +557,10 @@ def test_process_message_answers_brand_limit_question_without_station(monkeypatc
     # не резолвится без адреса, но лимит общий на бренд (см. gazetteer.yaml).
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
     conn: sqlite3.Connection = get_connection(":memory:")
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn, text="Подскажите сколько лимит на Роснефти",
         peer_id=2000000001, conversation_message_id=1, author_id=111,
-    )
+    ))
     assert outcome.label == "question"
     assert outcome.reply_text == "Роснефть: лимит 30 л в одни руки."
     # Чисто вопрос про лимит без станции — ничего не пишем в БД.
@@ -572,9 +573,9 @@ def test_process_message_brand_limit_fallback_does_not_override_resolved_station
     # как и раньше, а не отвечает лимитом бренда).
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
     conn: sqlite3.Connection = get_connection(":memory:")
-    outcome = process_message(
+    outcome = asyncio.run(process_message(
         conn, text="Сколько дают залить на Роснефти Лыжная?",
         peer_id=2000000001, conversation_message_id=1, author_id=111,
-    )
+    ))
     assert outcome.label == "question"
     assert outcome.reply_text is None

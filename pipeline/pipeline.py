@@ -1,6 +1,8 @@
+import asyncio
 import logging
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from config import LLM_ENABLED
 from db import repo
@@ -18,7 +20,7 @@ class PipelineOutcome:
     reply_text: str | None = None
 
 
-def _analyze(
+async def _analyze(
     text: str,
     *,
     own_text: str,
@@ -39,7 +41,17 @@ def _analyze(
     if LLM_ENABLED:
         from llm.client import analyze as llm_analyze
 
-        llm_result = llm_analyze(own_text, previous_message=previous_message, quoted_context=quoted_context)
+        # Единственное место во всей обработке, которое блокирует надолго:
+        # 1.8 с в норме, ~10 с при сбое провайдера. Раньше оно держало весь
+        # цикл событий, и всплеск из пяти вопросов обрабатывался строго
+        # по очереди — первый спросивший ждал не своё время, а время всего
+        # всплеска (находки H1/H2). Всё остальное (БД, шаблоны) занимает
+        # миллисекунды и остаётся в цикле событий: соединение SQLite
+        # привязано к потоку, в котором создано (H5), и выносить его в
+        # рабочий поток не требуется.
+        llm_result = await asyncio.to_thread(
+            llm_analyze, own_text, previous_message=previous_message, quoted_context=quoted_context
+        )
         if llm_result is not None:
             log.info(
                 "path=llm message_type=%s station_id=%s",
@@ -54,7 +66,7 @@ def _analyze(
     return result, station_id
 
 
-def process_message(
+async def process_message(
     conn: sqlite3.Connection,
     *,
     text: str,
@@ -64,6 +76,7 @@ def process_message(
     own_text: str | None = None,
     quoted_context: str | None = None,
     previous_message: str | None = None,
+    reported_at: datetime | None = None,
 ) -> PipelineOutcome:
     """Run one message through the pipeline. `text` may be enriched with
     quoted reply/forward context (see vk_handlers.py); `own_text` — what the
@@ -71,9 +84,15 @@ def process_message(
     `quoted_context` — the same reply/forward text, passed separately so the
     LLM branch can label it instead of seeing it baked into `text` unmarked.
     `previous_message` — the same author's previous on-topic message, used
-    only by the LLM path to resolve implicit references (see _analyze)."""
+    only by the LLM path to resolve implicit references (see _analyze).
+    `reported_at` — время самого сообщения (`message.date` из VK), а не
+    время обработки: при очереди факт иначе получает время на несколько
+    секунд позже, чем человек его написал, и именно это время потом решает,
+    какой отчёт свежее (находка H6)."""
     if own_text is None:
         own_text = text
+    if reported_at is None:
+        reported_at = datetime.now(timezone.utc)
 
     if not is_on_topic(text):
         with conn:
@@ -83,7 +102,7 @@ def process_message(
     # Анализ (в т.ч. вызов LLM) — ДО транзакции: держать открытую запись
     # секундами ради сетевого вызова нельзя, тем более что дальше обработка
     # станет конкурентной.
-    result, station_id = _analyze(
+    result, station_id = await _analyze(
         text, own_text=own_text, quoted_context=quoted_context, previous_message=previous_message
     )
 
@@ -101,6 +120,7 @@ def process_message(
             peer_id=peer_id,
             conversation_message_id=conversation_message_id,
             author_id=author_id,
+            reported_at=reported_at,
         )
         repo.mark_processed(conn, peer_id, conversation_message_id)
     return outcome
@@ -116,6 +136,7 @@ def _record(
     peer_id: int,
     conversation_message_id: int,
     author_id: int,
+    reported_at: datetime,
 ) -> PipelineOutcome:
     """Всё, что пишется по итогам разбора. Вызывается внутри транзакции —
     сам не коммитит и не открывает свою."""
@@ -144,6 +165,7 @@ def _record(
             peer_id=peer_id,
             conversation_message_id=conversation_message_id,
             author_id=author_id,
+            seen_at=reported_at,
             raw_text=text,
         )
         return PipelineOutcome("unresolved")
@@ -157,6 +179,7 @@ def _record(
             peer_id=peer_id,
             conversation_message_id=conversation_message_id,
             author_id=author_id,
+            reported_at=reported_at,
             raw_text=text,
         )
 
@@ -168,6 +191,7 @@ def _record(
             peer_id=peer_id,
             conversation_message_id=conversation_message_id,
             author_id=author_id,
+            reported_at=reported_at,
             raw_text=text,
         )
 
@@ -179,6 +203,7 @@ def _record(
             peer_id=peer_id,
             conversation_message_id=conversation_message_id,
             author_id=author_id,
+            reported_at=reported_at,
             raw_text=text,
         )
 

@@ -1,6 +1,7 @@
 import logging
 import random
 import time
+from datetime import datetime, timedelta, timezone
 
 from vkbottle.bot import Bot, Message
 
@@ -15,7 +16,22 @@ from templates import render_brand_limits_list
 log = logging.getLogger("vk_bot")
 
 _conn = get_connection()
-_last_reply_at: dict[int, float] = {}
+
+# Дебаунс — на пару «беседа + автор», а не на беседу целиком. Раньше окно
+# было общим на весь чат, и при всплеске бот отвечал одному из пяти
+# спросивших: замер показал 1 ответ из 5 на rule-based и 2 из 5 на Mistral
+# (находка H2) — ровно тогда, когда чат активен и бот полезнее всего.
+# Заодно снимается F3: публичная команда !лимит больше не съедает окно
+# чужих содержательных ответов.
+_last_reply_at: dict[tuple[int, int], float] = {}
+
+# Потолок на беседу поверх авторского дебаунса — страховка от
+# патологического всплеска, а не от обычной активности: при 316 сообщениях
+# в сутки десять ответов за минуту это уже аномалия. Срабатывание пишется в
+# лог, чтобы не быть ещё одним видом молчания (G3).
+_CHAT_REPLY_CAP = 10
+_CHAT_REPLY_WINDOW_SECONDS = 60
+_recent_chat_replies: dict[int, list[float]] = {}
 
 # Предыдущее сообщение автора в этом же чате — только для LLM-контекста
 # (см. pipeline/pipeline.py::_analyze), rule-based его не получает. Ключ —
@@ -50,9 +66,28 @@ def _is_allowed_peer(peer_id: int) -> bool:
     return False
 
 
-def _can_reply(peer_id: int) -> bool:
-    last = _last_reply_at.get(peer_id, 0.0)
-    return (time.monotonic() - last) >= MIN_REPLY_GAP_SECONDS
+def _can_reply(peer_id: int, author_id: int) -> bool:
+    """Можно ли отвечать этому автору в этой беседе прямо сейчас."""
+    now = time.monotonic()
+    last = _last_reply_at.get((peer_id, author_id), float("-inf"))
+    if (now - last) < MIN_REPLY_GAP_SECONDS:
+        return False
+
+    recent = [t for t in _recent_chat_replies.get(peer_id, []) if now - t < _CHAT_REPLY_WINDOW_SECONDS]
+    _recent_chat_replies[peer_id] = recent
+    if len(recent) >= _CHAT_REPLY_CAP:
+        log.warning(
+            "Потолок ответов на беседу исчерпан (%s за %s с), молчу. peer_id=%s",
+            _CHAT_REPLY_CAP, _CHAT_REPLY_WINDOW_SECONDS, peer_id,
+        )
+        return False
+    return True
+
+
+def _note_reply(peer_id: int, author_id: int) -> None:
+    now = time.monotonic()
+    _last_reply_at[(peer_id, author_id)] = now
+    _recent_chat_replies.setdefault(peer_id, []).append(now)
 
 
 def _recent_author_message(key: tuple[int, int]) -> str | None:
@@ -61,6 +96,47 @@ def _recent_author_message(key: tuple[int, int]) -> str | None:
         return None
     text, ts = entry
     return text if time.monotonic() - ts <= _AUTHOR_CONTEXT_TTL_SECONDS else None
+
+
+# Раньше этой даты сообщения из живого чата быть не может — так отсекается
+# в первую очередь эпоха-ноль (vkbottle отдаёт её как 1970-01-01, если даты
+# в событии не было).
+_EARLIEST_PLAUSIBLE_MESSAGE_TIME = datetime(2020, 1, 1, tzinfo=timezone.utc)
+
+
+def _message_time(message: Message) -> datetime:
+    """Время самого сообщения, а не момента записи в БД (находка H6). При
+    очереди из нескольких сообщений разница уже не косметическая: именно
+    это время решает, какой отчёт свежее и не устарел ли факт.
+
+    `Message.date` у vkbottle — уже `datetime` с UTC-таймзоной (проверено),
+    но naive-значение всё равно приводится к UTC: одна naive-строка в БД
+    навсегда ломает ответы по станции (находка D3).
+
+    Негодная дата (её нет, эпоха-ноль, будущее) — повод вернуться ко
+    времени обработки: лучше сместить факт на секунды, чем записать отчёт
+    «из будущего», который никогда не устареет."""
+    now = datetime.now(timezone.utc)
+    raw = getattr(message, "date", None)
+    if raw is None:
+        return now
+
+    if isinstance(raw, (int, float)):
+        try:
+            sent_at = datetime.fromtimestamp(raw, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            log.warning("Негодная дата сообщения (%r), беру время обработки", raw)
+            return now
+    elif isinstance(raw, datetime):
+        sent_at = raw if raw.tzinfo is not None else raw.replace(tzinfo=timezone.utc)
+    else:
+        log.warning("Неожиданный тип даты сообщения (%s), беру время обработки", type(raw).__name__)
+        return now
+
+    if sent_at < _EARLIEST_PLAUSIBLE_MESSAGE_TIME or sent_at > now + timedelta(minutes=5):
+        log.warning("Неправдоподобная дата сообщения (%s), беру время обработки", sent_at.isoformat())
+        return now
+    return sent_at
 
 
 def _quoted_context_text(message: Message) -> str:
@@ -200,8 +276,8 @@ async def handle_message(bot: Bot, message: Message) -> None:
         return
 
     if _is_limit_list_command(own_text):
-        if _can_reply(message.peer_id):
-            _last_reply_at[message.peer_id] = time.monotonic()
+        if _can_reply(message.peer_id, message.from_id):
+            _note_reply(message.peer_id, message.from_id)
             await _reply_with_retry(message, render_brand_limits_list(get_displayed_brand_fuel_limits()))
         _mark_processed(message.peer_id, message.conversation_message_id)
         return
@@ -215,7 +291,9 @@ async def handle_message(bot: Bot, message: Message) -> None:
         _last_author_message[author_key] = (own_text, time.monotonic())
 
     # Пишет факты и ставит отметку "обработано" одной транзакцией.
-    outcome = process_message(
+    # Вызов LLM внутри уходит в отдельный поток, так что цикл событий тут
+    # свободен и соседние сообщения не стоят в очереди за этим.
+    outcome = await process_message(
         _conn,
         text=combined_text,
         own_text=own_text,
@@ -224,6 +302,7 @@ async def handle_message(bot: Bot, message: Message) -> None:
         peer_id=message.peer_id,
         conversation_message_id=message.conversation_message_id,
         author_id=message.from_id,
+        reported_at=_message_time(message),
     )
     log.info(
         "peer_id=%s from_id=%s outcome=%s own_text=%r quoted=%r prev_msg=%r",
@@ -240,10 +319,10 @@ async def handle_message(bot: Bot, message: Message) -> None:
     # .env — дефолт, пока переключателем ни разу не пользовались.
     if not (message.is_mentioned or repo.get_auto_reply_enabled(_conn, default=AUTO_REPLY_ON_QUESTION)):
         return
-    if not _can_reply(message.peer_id):
+    if not _can_reply(message.peer_id, message.from_id):
         return
 
-    _last_reply_at[message.peer_id] = time.monotonic()
+    _note_reply(message.peer_id, message.from_id)
     tag = await _mention_tag(bot, message.from_id)
     await _reply_with_retry(message, f"{tag}{reply_text}")
 
