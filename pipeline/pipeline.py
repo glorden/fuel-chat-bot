@@ -76,12 +76,49 @@ def process_message(
         own_text = text
 
     if not is_on_topic(text):
+        with conn:
+            repo.mark_processed(conn, peer_id, conversation_message_id)
         return PipelineOutcome("off_topic")
 
+    # Анализ (в т.ч. вызов LLM) — ДО транзакции: держать открытую запись
+    # секундами ради сетевого вызова нельзя, тем более что дальше обработка
+    # станет конкурентной.
     result, station_id = _analyze(
         text, own_text=own_text, quoted_context=quoted_context, previous_message=previous_message
     )
 
+    # Одна транзакция на сообщение: либо легли все факты и отметка
+    # "обработано", либо не легло ничего (находки D5, G1). Отметка внутри
+    # пайплайна, а не в vk_handlers, именно поэтому — иначе её нельзя
+    # положить в ту же транзакцию, не растягивая транзакцию на вызов LLM.
+    with conn:
+        outcome = _record(
+            conn,
+            result,
+            station_id,
+            text=text,
+            own_text=own_text,
+            peer_id=peer_id,
+            conversation_message_id=conversation_message_id,
+            author_id=author_id,
+        )
+        repo.mark_processed(conn, peer_id, conversation_message_id)
+    return outcome
+
+
+def _record(
+    conn: sqlite3.Connection,
+    result: ExtractResult,
+    station_id: str | None,
+    *,
+    text: str,
+    own_text: str,
+    peer_id: int,
+    conversation_message_id: int,
+    author_id: int,
+) -> PipelineOutcome:
+    """Всё, что пишется по итогам разбора. Вызывается внутри транзакции —
+    сам не коммитит и не открывает свою."""
     if result.message_type == "irrelevant":
         return PipelineOutcome("irrelevant")
 

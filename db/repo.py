@@ -5,6 +5,16 @@ from pipeline.extract import BreakInfo, LimitInfo, ReportItem
 from pipeline.facts import QueueInfo
 
 
+# Записи, относящиеся к одному входящему сообщению (факты + отметка
+# "обработано"), должны ложиться ОДНОЙ транзакцией: иначе сбой между ними
+# оставляет либо половину факта (находка D5), либо сообщение, помеченное
+# обработанным без единой записанной строки (находка G1). Поэтому функции
+# ниже не коммитят сами — транзакцией владеет вызывающий, см.
+# pipeline/pipeline.py::process_message и его блок `with conn:`.
+# Исключение — set_auto_reply_enabled: она вызывается вне пайплайна и
+# коммитит сама.
+
+
 def already_processed(conn: sqlite3.Connection, peer_id: int, conversation_message_id: int) -> bool:
     row = conn.execute(
         "SELECT 1 FROM processed_message WHERE peer_id = ? AND conversation_message_id = ?",
@@ -19,7 +29,6 @@ def mark_processed(conn: sqlite3.Connection, peer_id: int, conversation_message_
         "VALUES (?, ?, ?)",
         (peer_id, conversation_message_id, datetime.now(timezone.utc).isoformat()),
     )
-    conn.commit()
 
 
 def insert_fuel_report(
@@ -55,7 +64,6 @@ def insert_fuel_report(
             raw_text,
         ),
     )
-    conn.commit()
 
 
 def insert_station_break(
@@ -84,7 +92,6 @@ def insert_station_break(
             raw_text,
         ),
     )
-    conn.commit()
 
 
 def insert_fuel_limit(
@@ -112,7 +119,6 @@ def insert_fuel_limit(
             raw_text,
         ),
     )
-    conn.commit()
 
 
 def set_auto_reply_enabled(conn: sqlite3.Connection, *, enabled: bool, changed_by: int) -> None:
@@ -146,4 +152,3 @@ def insert_unresolved_mention(
         "(peer_id, conversation_message_id, author_id, seen_at, raw_text) VALUES (?, ?, ?, ?, ?)",
         (peer_id, conversation_message_id, author_id, datetime.now(timezone.utc).isoformat(), raw_text),
     )
-    conn.commit()
