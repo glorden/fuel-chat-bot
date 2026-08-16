@@ -3,7 +3,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from config import FRESH_MINUTES, STALE_MINUTES
-from pipeline.facts import StationBreak, StationFact, StationLimit
+from pipeline.facts import QueueInfo, StationBreak, StationFact, StationLimit
 from pipeline.resolve_station import get_brand_fuel_limit, get_station_name, resolve_brand
 from templates import render_station_answer
 
@@ -21,8 +21,20 @@ def _tier_for_age(age_minutes: float) -> str:
     return "very_stale"
 
 
+def _queue_from_row(status, minutes, cars_from, cars_to) -> QueueInfo | None:
+    """None и для «очередь не упоминалась», и для строк, записанных до
+    перехода на структурированную очередь: у них queue_status пуст, а
+    легаси-колонка queue_note не читается сознательно (см. db/schema.py)."""
+    if status is None:
+        return None
+    return QueueInfo(status=status, minutes=minutes, cars_from=cars_from, cars_to=cars_to)
+
+
 def _latest_facts(conn: sqlite3.Connection, station_id: str, grades: list[str] | None) -> list[StationFact]:
-    query = "SELECT fuel_grade, status, queue_note, reported_at FROM fuel_report WHERE station_id = ?"
+    query = (
+        "SELECT fuel_grade, status, queue_status, queue_minutes, queue_cars_from, queue_cars_to, "
+        "reported_at FROM fuel_report WHERE station_id = ?"
+    )
     params: list = [station_id]
     if grades:
         query += f" AND fuel_grade IN ({','.join('?' for _ in grades)})"
@@ -40,13 +52,13 @@ def _latest_facts(conn: sqlite3.Connection, station_id: str, grades: list[str] |
     now = datetime.now(timezone.utc)
     facts = []
     for grade, rows in by_grade.items():
-        _, status, queue_note, reported_at = rows[0]
+        _, status, q_status, q_minutes, q_cars_from, q_cars_to, reported_at = rows[0]
         reported_dt = datetime.fromisoformat(reported_at)
         age_minutes = (now - reported_dt).total_seconds() / 60
 
         conflicting = False
         if len(rows) == 2:
-            _, prev_status, _, prev_reported_at = rows[1]
+            prev_status, prev_reported_at = rows[1][1], rows[1][-1]
             prev_age = (now - datetime.fromisoformat(prev_reported_at)).total_seconds() / 60
             conflicting = prev_status != status and prev_age <= STALE_MINUTES
 
@@ -54,7 +66,7 @@ def _latest_facts(conn: sqlite3.Connection, station_id: str, grades: list[str] |
             StationFact(
                 grade=grade,
                 status=status,
-                queue_note=queue_note,
+                queue=_queue_from_row(q_status, q_minutes, q_cars_from, q_cars_to),
                 reported_at=reported_dt,
                 age_minutes=age_minutes,
                 tier=_tier_for_age(age_minutes),

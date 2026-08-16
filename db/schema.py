@@ -16,7 +16,16 @@ CREATE TABLE IF NOT EXISTS fuel_report (
     station_id TEXT NOT NULL,
     fuel_grade TEXT NOT NULL,
     status TEXT NOT NULL,
+    -- Легаси: свободный текст про очередь от модели. Больше не пишется и
+    -- НЕ читается (см. ARCH_DECISIONS.md, Р2 — через это поле проходила
+    -- инъекция F1, и она оседала тут навсегда). Колонка оставлена, чтобы
+    -- не переписывать историю append-only лога; воскрешать её на чтение
+    -- нельзя. Актуальная очередь — в queue_* ниже.
     queue_note TEXT,
+    queue_status TEXT,          -- "none" | "present" | NULL (не упоминалась)
+    queue_minutes INTEGER,
+    queue_cars_from INTEGER,
+    queue_cars_to INTEGER,
     peer_id INTEGER NOT NULL,
     conversation_message_id INTEGER NOT NULL,
     author_id INTEGER NOT NULL,
@@ -71,8 +80,33 @@ CREATE TABLE IF NOT EXISTS auto_reply_setting (
 """
 
 
+# Колонки, добавленные после того, как таблица уже существовала на проде.
+# "CREATE TABLE IF NOT EXISTS" их не добавит — существующую таблицу он
+# просто пропускает, и бот падал бы не на старте, а на первом сообщении
+# (находка D6). Полноценных миграций тут нет и не заводится: это
+# минимальный догоняющий ALTER для того случая, который реально возник.
+_ADDED_COLUMNS = {
+    "fuel_report": {
+        "queue_status": "TEXT",
+        "queue_minutes": "INTEGER",
+        "queue_cars_from": "INTEGER",
+        "queue_cars_to": "INTEGER",
+    },
+}
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    for table, columns in _ADDED_COLUMNS.items():
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, declaration in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
+    conn.commit()
+
+
 def get_connection(path: Path = DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(_SCHEMA)
+    _add_missing_columns(conn)
     return conn

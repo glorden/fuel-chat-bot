@@ -116,7 +116,7 @@ def process_message(
             conn,
             station_id=station_id,
             report=report,
-            queue_note=result.queue_note,
+            queue=result.queue,
             peer_id=peer_id,
             conversation_message_id=conversation_message_id,
             author_id=author_id,

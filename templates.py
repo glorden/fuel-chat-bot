@@ -1,5 +1,5 @@
 from pipeline.extract import LimitInfo
-from pipeline.facts import MOSCOW_TZ, StationBreak, StationFact, StationLimit
+from pipeline.facts import MOSCOW_TZ, QueueInfo, StationBreak, StationFact, StationLimit
 
 _FRESHNESS_NOTE = {
     "fresh": "",
@@ -23,7 +23,7 @@ def render_station_answer(
     if not facts and break_info is None and limit_info is None:
         return f"По «{station_name}» пока нет данных в чате — никто не сообщал."
 
-    uniform_queue = _uniform_queue_note(facts)
+    uniform_queue = _uniform_queue(facts)
     lines = [_render_header(station_name, facts, uniform_queue)]
     if break_info is not None:
         lines.append(_render_break_line(break_info))
@@ -33,17 +33,31 @@ def render_station_answer(
     return "\n".join(lines)
 
 
-def _uniform_queue_note(facts: list[StationFact]) -> str | None:
-    queue_notes = {f.queue_note for f in facts if f.queue_note}
-    return next(iter(queue_notes)) if len(queue_notes) == 1 else None
+def render_queue(queue: QueueInfo) -> str:
+    """Единственное место, где очередь превращается в текст. Словарь
+    фиксирован, от модели приходят только статус и числа — именно этим
+    закрыт F1 (см. ARCH_DECISIONS.md, Р2)."""
+    if queue.status == "none":
+        return "без очереди"
+    if queue.minutes is not None:
+        return f"~{queue.minutes} мин"
+    if queue.cars_from is not None:
+        cars = f"{queue.cars_from}-{queue.cars_to}" if queue.cars_to is not None else f"{queue.cars_from}"
+        return f"~{cars} машин"
+    return "есть очередь"
 
 
-def _render_header(station_name: str, facts: list[StationFact], uniform_queue: str | None) -> str:
+def _uniform_queue(facts: list[StationFact]) -> QueueInfo | None:
+    queues = {f.queue for f in facts if f.queue}
+    return next(iter(queues)) if len(queues) == 1 else None
+
+
+def _render_header(station_name: str, facts: list[StationFact], uniform_queue: QueueInfo | None) -> str:
     if not facts:
         return f"информация по {station_name}."
     freshest = max(facts, key=lambda f: f.reported_at)
     time_str = freshest.reported_at.astimezone(MOSCOW_TZ).strftime("%H:%M")
-    header_queue = f", {uniform_queue}" if uniform_queue else ""
+    header_queue = f", {render_queue(uniform_queue)}" if uniform_queue else ""
     return f"информация по {station_name} на {time_str}{header_queue}."
 
 
@@ -81,16 +95,16 @@ def _render_limit_line(limit: StationLimit) -> str:
     return f"{value} (сообщили {_format_age(limit.reported_minutes_ago)} назад)."
 
 
-def _render_grouped_fact_lines(facts: list[StationFact], uniform_queue: str | None) -> list[str]:
+def _render_grouped_fact_lines(facts: list[StationFact], uniform_queue: QueueInfo | None) -> list[str]:
     # Группируем марки с одинаковым (статус, свежесть, конфликт, очередь) в
     # одну строку — обычный случай (всё свежо, без конфликтов, очередь одна
     # на всех или её нет) даёт ровно 2 строки: "Есть"/"Нет". Марка, которая
     # чем-то отличается от общей картины, естественным образом попадает в
     # свою собственную группу — компактность не ломается, а расхождение не
     # прячется молча.
-    groups: dict[tuple[str, str, bool, str | None], list[str]] = {}
+    groups: dict[tuple[str, str, bool, QueueInfo | None], list[str]] = {}
     for fact in sorted(facts, key=lambda f: f.grade):
-        queue_for_line = None if fact.queue_note == uniform_queue else fact.queue_note
+        queue_for_line = None if fact.queue == uniform_queue else fact.queue
         key = (fact.status, fact.tier, fact.conflicting, queue_for_line)
         groups.setdefault(key, []).append(fact.grade)
 
@@ -101,7 +115,7 @@ def _render_grouped_fact_lines(facts: list[StationFact], uniform_queue: str | No
         status_word = "Есть" if status == "available" else "Нет"
         suffix = _FRESHNESS_NOTE[tier]
         if queue_for_line:
-            suffix += f", {queue_for_line}"
+            suffix += f", {render_queue(queue_for_line)}"
         if conflicting:
             suffix += " (было иначе)"
         lines.append(f"{', '.join(grades)} - {status_word}{suffix}")

@@ -19,7 +19,7 @@ def test_recurses_into_properties_and_items():
         "nullable": True,
         "description": "id станции из списка известных АЗС, или null, если не уверен.",
     }
-    assert result["properties"]["queue_note"]["nullable"] is True
+    assert result["properties"]["queue"]["nullable"] is True
     report_item_schema = result["properties"]["reports"]["items"]
     assert report_item_schema["properties"]["grade"]["type"] == "string"
     assert "nullable" not in report_item_schema["properties"]["grade"]

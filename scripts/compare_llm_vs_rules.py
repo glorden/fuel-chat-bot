@@ -29,7 +29,7 @@ def _rule_based(text: str) -> str:
     reports = [(r.grade, r.status) for r in result.reports]
     return (
         f"type={result.message_type} station={station_id} reports={reports} "
-        f"q_grades={result.question_grades} queue={result.queue_note!r} "
+        f"q_grades={result.question_grades} queue={result.queue!r} "
         f"break={_break_repr(result.break_info)} limit={_limit_repr(result.limit_info)}"
     )
 
@@ -42,7 +42,7 @@ def _llm_based(text: str) -> str:
     reports = [(r.grade, r.status) for r in er.reports]
     return (
         f"type={er.message_type} station={result.station_id} reports={reports} "
-        f"q_grades={er.question_grades} queue={er.queue_note!r} "
+        f"q_grades={er.question_grades} queue={er.queue!r} "
         f"break={_break_repr(er.break_info)} limit={_limit_repr(er.limit_info)}"
     )
 

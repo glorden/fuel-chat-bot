@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import pipeline.pipeline as pipeline_module
 from db.schema import get_connection
 from pipeline.extract import LimitInfo, ReportItem, extract, resolve_clock_time_to_iso
-from pipeline.facts import MOSCOW_TZ
+from pipeline.facts import MOSCOW_TZ, QueueInfo
 from pipeline.pipeline import process_message
 from pipeline.prefilter import is_on_topic
 from pipeline.resolve_station import (
@@ -73,22 +73,22 @@ def test_reports_classified_with_grade_status_and_queue():
     result = extract("РН лесной, 95 есть на 4,5 колонке. Очередь.")
     assert result.message_type == "report"
     assert result.reports == [ReportItem("95", "available")]
-    assert result.queue_note == "есть очередь"
+    assert result.queue == QueueInfo(status="present")
 
     result = extract("В Янишполе появился 95-й бензин заправилась за 12 минут работают все колонки")
     assert result.reports[0].grade == "95"
     assert result.reports[0].status == "available"
-    assert result.queue_note == "~12 мин"
+    assert result.queue == QueueInfo(status="present", minutes=12)
 
     result = extract("Лукойл Вилга только 92 на табло, очереди нет")
     assert result.reports[0].grade == "92"
     assert result.reports[0].status == "available"
-    assert result.queue_note == "без очереди"
+    assert result.queue == QueueInfo(status="none")
 
     result = extract("Татнефть силикатный только дт")
     assert result.reports[0].grade == "ДТ"
     assert result.reports[0].status == "available"
-    assert result.queue_note is None
+    assert result.queue is None
 
     result = extract("Нет 95го в янишполе\n92 и ДТ")
     grades_status = {r.grade: r.status for r in result.reports}
@@ -96,14 +96,14 @@ def test_reports_classified_with_grade_status_and_queue():
 
     result = extract("РН на лыжной-95 на 1 и 2 колонке")
     assert result.reports == [ReportItem("95", "available")]
-    assert result.queue_note is None
+    assert result.queue is None
 
     result = extract("опти на суоярвском 92-й без очереди и ограничений")
     assert result.reports == [ReportItem("92", "available")]
-    assert result.queue_note == "без очереди"
+    assert result.queue == QueueInfo(status="none")
 
     # Многоклаузное сообщение про две марки на одной АЗС. Обе марки и статусы
-    # извлекаются верно; queue_note берётся по первому совпавшему сигналу на
+    # извлекаются верно; очередь берётся по первому совпавшему сигналу на
     # весь текст ("нет очереди" из клаузы про 92) — известное упрощение:
     # per-клаузного разбора очереди по каждой марке отдельно пока нет.
     result = extract(
@@ -112,17 +112,17 @@ def test_reports_classified_with_grade_status_and_queue():
     )
     grades_status = {r.grade: r.status for r in result.reports}
     assert grades_status == {"95": "available", "92": "available"}
-    assert result.queue_note == "без очереди"
+    assert result.queue == QueueInfo(status="none")
 
     # Очередь в машинах, а не в минутах — отдельный формат, не "мин".
     result = extract("Татнефть есть 95й\nВозле силикатного кольца\nОчередь 6 машин")
     assert result.reports == [ReportItem("95", "available")]
-    assert result.queue_note == "~6 машин"
+    assert result.queue == QueueInfo(status="present", cars_from=6)
 
     result = extract("Лесной 79 Роснефть - 92, 95, дт. Очередь - 3-4 машины на Лесном перед заездом.")
     grades_status = {r.grade: r.status for r in result.reports}
     assert grades_status == {"92": "available", "95": "available", "ДТ": "available"}
-    assert result.queue_note == "~3-4 машин"
+    assert result.queue == QueueInfo(status="present", cars_from=3, cars_to=4)
 
 
 def test_generic_availability_without_explicit_grade_is_a_known_gap():
@@ -399,7 +399,7 @@ def test_off_topic_and_no_signal_messages_produce_no_structured_data():
 def test_process_message_end_to_end_against_temp_db(monkeypatch):
     # Форсируем rule-based: .env этой машины держит LLM_ENABLED=true, и без
     # этого тест неявно бил в живой Gemini — иногда с другой (тоже верной)
-    # формулировкой queue_note, что делало тест ложно нестабильным. Известно
+    # формулировкой очереди, что делало тест ложно нестабильным. Известно
     # с Этапа 9, откладывалось; чиним по ходу другой правки в этом же файле.
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
     conn: sqlite3.Connection = get_connection(":memory:")
@@ -409,8 +409,8 @@ def test_process_message_end_to_end_against_temp_db(monkeypatch):
         peer_id=2000000001, conversation_message_id=1, author_id=111,
     )
     assert outcome.label == "report:rosneft_lesnoy_79"
-    row = conn.execute("SELECT station_id, fuel_grade, status, queue_note FROM fuel_report").fetchone()
-    assert row == ("rosneft_lesnoy_79", "95", "available", "есть очередь")
+    row = conn.execute("SELECT station_id, fuel_grade, status, queue_status FROM fuel_report").fetchone()
+    assert row == ("rosneft_lesnoy_79", "95", "available", "present")
 
     outcome = process_message(
         conn, text="Заправился в Пряже, 92 есть",
@@ -485,8 +485,8 @@ def test_process_message_writes_report_when_own_text_has_its_own_signal(monkeypa
         peer_id=2000000001, conversation_message_id=1, author_id=111,
     )
     assert outcome.label == "report:rosneft_lesnoy_79"
-    row = conn.execute("SELECT fuel_grade, status, queue_note FROM fuel_report").fetchone()
-    assert row == ("95", "available", "есть очередь")
+    row = conn.execute("SELECT fuel_grade, status, queue_status FROM fuel_report").fetchone()
+    assert row == ("95", "available", "present")
 
 
 def test_process_message_question_resolves_station_from_quoted_report(monkeypatch):

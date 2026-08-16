@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from pipeline.facts import MOSCOW_TZ
+from pipeline.facts import MOSCOW_TZ, QueueInfo
 
 _GRADE_TOKEN = re.compile(
     r"(?i)\b(92|95|98|100)(?:-?(?:й|го|м|ый))?\b|\b(дт|дизел\w*|солярк\w*)\b"
@@ -17,7 +17,10 @@ _NO_QUEUE = re.compile(r"(?i)очеред\w*\s+нет|нет\s+очеред\w*|�
 _QUEUE_MINUTES = re.compile(
     r"(?i)(?:заправ\w*|отсто\w*|прожда\w*|ожида\w*|очеред\w*)\D{0,15}?(\d{1,3})\s*мин"
 )
-_QUEUE_CARS = re.compile(r"(?i)(\d{1,3}(?:\s*[-–]\s*\d{1,3})?)\s*машин\w*")
+# Две группы, а не одна: нижняя и (необязательная) верхняя граница
+# диапазона — "3-4 машины" должно доехать до ответа как "~3-4 машин", а
+# структурированное хранение (см. QueueInfo) требует чисел, не строки.
+_QUEUE_CARS = re.compile(r"(?i)(\d{1,3})(?:\s*[-–]\s*(\d{1,3}))?\s*машин\w*")
 _QUEUE_PRESENT = re.compile(r"(?i)\bочеред\w*")
 
 _BREAK_KIND_WORDS = {
@@ -91,22 +94,21 @@ class ExtractResult:
     message_type: str  # "report" | "question" | "irrelevant"
     reports: list[ReportItem] = field(default_factory=list)
     question_grades: list[str] = field(default_factory=list)
-    queue_note: str | None = None
+    queue: QueueInfo | None = None
     break_info: BreakInfo | None = None
     limit_info: LimitInfo | None = None
 
 
-def _extract_queue_note(text: str) -> str | None:
+def _extract_queue_info(text: str) -> QueueInfo | None:
     if _NO_QUEUE.search(text):
-        return "без очереди"
-    m = _QUEUE_MINUTES.search(text)
-    if m:
-        return f"~{m.group(1)} мин"
-    m = _QUEUE_CARS.search(text)
-    if m:
-        return f"~{m.group(1)} машин"
+        return QueueInfo(status="none")
+    if m := _QUEUE_MINUTES.search(text):
+        return QueueInfo(status="present", minutes=int(m.group(1)))
+    if m := _QUEUE_CARS.search(text):
+        cars_to = int(m.group(2)) if m.group(2) else None
+        return QueueInfo(status="present", cars_from=int(m.group(1)), cars_to=cars_to)
     if _QUEUE_PRESENT.search(text):
-        return "есть очередь"
+        return QueueInfo(status="present")
     return None
 
 
@@ -182,7 +184,7 @@ def extract(text: str) -> ExtractResult:
         return ExtractResult(
             message_type="report",
             reports=reports,
-            queue_note=_extract_queue_note(text),
+            queue=_extract_queue_info(text),
             break_info=break_info,
             limit_info=limit_info,
         )

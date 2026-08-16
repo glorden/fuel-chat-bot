@@ -3,12 +3,18 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from pipeline.extract import BreakInfo, ExtractResult, LimitInfo, ReportItem, resolve_clock_time_to_iso
+from pipeline.facts import QueueInfo
 from pipeline.resolve_station import is_known_station
 
 VALID_GRADES = {"92", "95", "98", "100", "ДТ"}
 MESSAGE_TYPES = {"report", "question", "irrelevant"}
 VALID_BREAK_KINDS = {"слив", "отстой", "перерыв"}
 VALID_LIMIT_STATUSES = {"limited", "unlimited"}
+VALID_QUEUE_STATUSES = {"none", "present"}
+# Верхняя граница для чисел очереди: столько же, сколько допускает regex
+# rule-based пути (\d{1,3}). Нужна не ради формата, а чтобы абсурдное
+# число от модели не доехало до чата как факт.
+MAX_QUEUE_VALUE = 999
 
 TOOL_NAME = "record_analysis"
 TOOL_DESCRIPTION = "Записать разбор сообщения из чата про заправки топливом."
@@ -40,9 +46,41 @@ PARAMETERS_SCHEMA = {
             "description": "Только для question: марки, о которых спрашивают.",
             "items": {"type": "string", "enum": sorted(VALID_GRADES)},
         },
-        "queue_note": {
-            "type": ["string", "null"],
-            "description": "Короткая заметка про очередь на русском, или null.",
+        "queue": {
+            "type": ["object", "null"],
+            "description": (
+                "Очередь на станции, если она упомянута; иначе null. Только "
+                "статус и числа — свободного текста в этом поле нет, "
+                "формулировку ответа выбирает бот, не ты."
+            ),
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": sorted(VALID_QUEUE_STATUSES),
+                    "description": "'none' — очереди нет, 'present' — очередь есть.",
+                },
+                "minutes": {
+                    "type": ["integer", "null"],
+                    "description": (
+                        "Сколько минут ждать, если число названо явно; иначе null."
+                    ),
+                },
+                "cars_from": {
+                    "type": ["integer", "null"],
+                    "description": (
+                        "Сколько машин в очереди, если число названо явно "
+                        "(нижняя граница, если назван диапазон); иначе null."
+                    ),
+                },
+                "cars_to": {
+                    "type": ["integer", "null"],
+                    "description": (
+                        "Верхняя граница диапазона машин ('3-4 машины'), "
+                        "если назван именно диапазон; иначе null."
+                    ),
+                },
+            },
+            "required": ["status", "minutes", "cars_from", "cars_to"],
         },
         "break_info": {
             "type": ["object", "null"],
@@ -101,7 +139,7 @@ PARAMETERS_SCHEMA = {
         },
     },
     "required": [
-        "message_type", "station_id", "reports", "question_grades", "queue_note", "break_info", "limit_info",
+        "message_type", "station_id", "reports", "question_grades", "queue", "break_info", "limit_info",
     ],
 }
 
@@ -137,6 +175,41 @@ def _parse_break_info(raw) -> BreakInfo | None:
     return BreakInfo(kind=kind, until=until, duration_note=duration_note)
 
 
+def _queue_number(raw) -> int | None:
+    """Число из ответа модели или None. bool отсекается отдельно: в Python
+    True — это int, и без проверки "очередь: 1 машина" получилась бы из
+    queue={"cars_from": true}."""
+    if not isinstance(raw, int) or isinstance(raw, bool):
+        return None
+    return raw if 1 <= raw <= MAX_QUEUE_VALUE else None
+
+
+def _parse_queue_info(raw) -> QueueInfo | None:
+    """Единственный путь, которым очередь от модели попадает в БД и потом
+    в чат. Строка вместо объекта, неизвестный статус, лишние ключи с
+    текстом — всё это даёт None или отбрасывается: свободному тексту тут
+    просто некуда попасть (см. ARCH_DECISIONS.md, Р2)."""
+    if not isinstance(raw, dict):
+        return None
+
+    status = raw.get("status")
+    if status not in VALID_QUEUE_STATUSES:
+        return None
+    if status == "none":
+        return QueueInfo(status="none")
+
+    cars_from = _queue_number(raw.get("cars_from"))
+    cars_to = _queue_number(raw.get("cars_to")) if cars_from is not None else None
+    if cars_to is not None and cars_to <= cars_from:
+        cars_to = None
+    return QueueInfo(
+        status="present",
+        minutes=_queue_number(raw.get("minutes")),
+        cars_from=cars_from,
+        cars_to=cars_to,
+    )
+
+
 def _parse_limit_info(raw) -> LimitInfo | None:
     if not isinstance(raw, dict):
         return None
@@ -163,9 +236,7 @@ def _parse_arguments(raw: dict) -> LLMAnalysis | None:
     if not isinstance(station_id, str) or not station_id or not is_known_station(station_id):
         station_id = None
 
-    queue_note = raw.get("queue_note")
-    if not isinstance(queue_note, str) or not queue_note:
-        queue_note = None
+    queue = _parse_queue_info(raw.get("queue"))
 
     reports = []
     for item in raw.get("reports") or []:
@@ -187,7 +258,7 @@ def _parse_arguments(raw: dict) -> LLMAnalysis | None:
         message_type=message_type,
         reports=reports,
         question_grades=question_grades,
-        queue_note=queue_note,
+        queue=queue,
         break_info=break_info,
         limit_info=limit_info,
     )
