@@ -31,13 +31,19 @@ def env(monkeypatch):
 
 def _make_provider_slow(monkeypatch):
     """Блокирующий вызов провайдера — ровно то, что делает синхронный HTTP.
-    Возвращает None, то есть разбор уходит на rule-based: тут измеряется не
-    качество разбора, а то, занимает ли вызов цикл событий."""
+    Отвечает успешно (иначе сработал бы гвард Р1 и факты не записались бы):
+    измеряется здесь не качество разбора, а то, занимает ли вызов цикл
+    событий."""
     import llm.client
+    from llm.client import LLMAnalysis
+    from pipeline.extract import ExtractResult, ReportItem
 
     def slow_analyze(*args, **kwargs):
         time.sleep(_SLOW_CALL_SECONDS)
-        return None
+        return LLMAnalysis(
+            extract_result=ExtractResult(message_type="report", reports=[ReportItem("92", "available")]),
+            station_id="lukoil_vilga",
+        )
 
     monkeypatch.setattr(llm.client, "analyze", slow_analyze)
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", True)

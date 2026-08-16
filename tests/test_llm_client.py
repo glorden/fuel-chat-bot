@@ -1,5 +1,6 @@
 from datetime import datetime
 
+import llm.client
 from llm.client import _parse_arguments
 from pipeline.extract import BreakInfo, LimitInfo, ReportItem
 from pipeline.facts import MOSCOW_TZ, QueueInfo
@@ -392,3 +393,85 @@ def test_parse_queue_none_status_is_not_the_same_as_missing_queue():
         _report_with_queue({"status": "none", "minutes": None, "cars_from": None, "cars_to": None})
     ).extract_result.queue == QueueInfo(status="none")
     assert _parse_arguments(_report_with_queue(None)).extract_result.queue is None
+
+
+# --- Цепочка провайдеров: вторая попытка перед откатом (ARCH_DECISIONS.md Р1) ---
+#
+# Резервный путь теперь не пишет факты, поэтому каждый сбой основного
+# провайдера — это ещё и потерянные факты; вторая попытка их спасает.
+
+
+def _valid_raw() -> dict:
+    return {
+        "message_type": "report",
+        "station_id": "lukoil_vilga",
+        "reports": [{"grade": "92", "status": "available"}],
+        "question_grades": [],
+        "queue": None,
+    }
+
+
+def test_provider_chain_is_just_the_primary_without_a_fallback(monkeypatch):
+    monkeypatch.setattr(llm.client, "LLM_PROVIDER", "mistral")
+    monkeypatch.setattr(llm.client, "LLM_FALLBACK_PROVIDER", None)
+    assert llm.client._provider_chain() == ["mistral"]
+
+
+def test_fallback_equal_to_primary_is_not_tried_twice(monkeypatch):
+    monkeypatch.setattr(llm.client, "LLM_PROVIDER", "mistral")
+    monkeypatch.setattr(llm.client, "LLM_FALLBACK_PROVIDER", "mistral")
+    assert llm.client._provider_chain() == ["mistral"]
+
+
+def test_second_provider_is_tried_when_the_first_does_not_answer(monkeypatch):
+    monkeypatch.setattr(llm.client, "LLM_PROVIDER", "mistral")
+    monkeypatch.setattr(llm.client, "LLM_FALLBACK_PROVIDER", "groq")
+    called = []
+
+    def fake_raw_for(provider):
+        def raw_analyze(text, previous_message=None, quoted_context=None):
+            called.append(provider)
+            return None if provider == "mistral" else _valid_raw()
+
+        return raw_analyze
+
+    monkeypatch.setattr(llm.client, "_raw_analyze_for", fake_raw_for)
+    result = llm.client.analyze("Вилга 92 есть")
+
+    assert called == ["mistral", "groq"]
+    assert result is not None
+    assert result.station_id == "lukoil_vilga"
+
+
+def test_no_second_call_when_the_first_provider_answers(monkeypatch):
+    monkeypatch.setattr(llm.client, "LLM_PROVIDER", "mistral")
+    monkeypatch.setattr(llm.client, "LLM_FALLBACK_PROVIDER", "groq")
+    called = []
+
+    def fake_raw_for(provider):
+        def raw_analyze(text, previous_message=None, quoted_context=None):
+            called.append(provider)
+            return _valid_raw()
+
+        return raw_analyze
+
+    monkeypatch.setattr(llm.client, "_raw_analyze_for", fake_raw_for)
+    assert llm.client.analyze("Вилга 92 есть") is not None
+    assert called == ["mistral"]
+
+
+def test_none_only_after_the_whole_chain_failed(monkeypatch):
+    monkeypatch.setattr(llm.client, "LLM_PROVIDER", "mistral")
+    monkeypatch.setattr(llm.client, "LLM_FALLBACK_PROVIDER", "groq")
+    called = []
+
+    def fake_raw_for(provider):
+        def raw_analyze(text, previous_message=None, quoted_context=None):
+            called.append(provider)
+            return None
+
+        return raw_analyze
+
+    monkeypatch.setattr(llm.client, "_raw_analyze_for", fake_raw_for)
+    assert llm.client.analyze("Вилга 92 есть") is None
+    assert called == ["mistral", "groq"]

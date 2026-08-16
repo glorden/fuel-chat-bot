@@ -41,6 +41,7 @@ def insert_fuel_report(
     conversation_message_id: int,
     author_id: int,
     reported_at: datetime,
+    source: str,
     raw_text: str,
 ) -> None:
     """Легаси-колонка `queue_note` намеренно не заполняется: свободного
@@ -49,7 +50,7 @@ def insert_fuel_report(
         "INSERT INTO fuel_report "
         "(station_id, fuel_grade, status, queue_status, queue_minutes, queue_cars_from, "
         " queue_cars_to, peer_id, conversation_message_id, "
-        " author_id, reported_at, raw_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " author_id, reported_at, raw_text, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             station_id,
             report.grade,
@@ -63,6 +64,7 @@ def insert_fuel_report(
             author_id,
             reported_at.isoformat(),
             raw_text,
+            source,
         ),
     )
 
@@ -76,12 +78,13 @@ def insert_station_break(
     conversation_message_id: int,
     author_id: int,
     reported_at: datetime,
+    source: str,
     raw_text: str,
 ) -> None:
     conn.execute(
         "INSERT INTO station_break "
         "(station_id, kind, until, duration_note, peer_id, conversation_message_id, "
-        " author_id, reported_at, raw_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " author_id, reported_at, raw_text, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             station_id,
             break_info.kind,
@@ -92,6 +95,7 @@ def insert_station_break(
             author_id,
             reported_at.isoformat(),
             raw_text,
+            source,
         ),
     )
 
@@ -105,12 +109,13 @@ def insert_fuel_limit(
     conversation_message_id: int,
     author_id: int,
     reported_at: datetime,
+    source: str,
     raw_text: str,
 ) -> None:
     conn.execute(
         "INSERT INTO fuel_limit "
         "(station_id, status, liters, peer_id, conversation_message_id, "
-        " author_id, reported_at, raw_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        " author_id, reported_at, raw_text, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             station_id,
             limit_info.status,
@@ -120,6 +125,7 @@ def insert_fuel_limit(
             author_id,
             reported_at.isoformat(),
             raw_text,
+            source,
         ),
     )
 

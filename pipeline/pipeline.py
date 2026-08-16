@@ -3,6 +3,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 from config import LLM_ENABLED
 from db import repo
@@ -20,13 +21,20 @@ class PipelineOutcome:
     reply_text: str | None = None
 
 
+class Analysis(NamedTuple):
+    result: ExtractResult
+    station_id: str | None
+    source: str  # "llm" | "rule_based"
+    llm_failed: bool  # LLM был включён, но не ответил — см. Р1
+
+
 async def _analyze(
     text: str,
     *,
     own_text: str,
     quoted_context: str | None = None,
     previous_message: str | None = None,
-) -> tuple[ExtractResult, str | None]:
+) -> Analysis:
     """Классификация+извлечение+резолв станции. Пробует LLM (если включён),
     при любом сбое или если LLM выключен — текущий rule-based путь.
 
@@ -58,12 +66,11 @@ async def _analyze(
                 llm_result.extract_result.message_type,
                 llm_result.station_id,
             )
-            return llm_result.extract_result, llm_result.station_id
-        log.info("path=rule_based reason=llm_fallback")
+            return Analysis(llm_result.extract_result, llm_result.station_id, "llm", llm_failed=False)
 
     result = extract(text)
     station_id = resolve_station(text) if result.message_type != "irrelevant" else None
-    return result, station_id
+    return Analysis(result, station_id, "rule_based", llm_failed=LLM_ENABLED)
 
 
 async def process_message(
@@ -102,7 +109,7 @@ async def process_message(
     # Анализ (в т.ч. вызов LLM) — ДО транзакции: держать открытую запись
     # секундами ради сетевого вызова нельзя, тем более что дальше обработка
     # станет конкурентной.
-    result, station_id = await _analyze(
+    analysis = await _analyze(
         text, own_text=own_text, quoted_context=quoted_context, previous_message=previous_message
     )
 
@@ -113,8 +120,7 @@ async def process_message(
     with conn:
         outcome = _record(
             conn,
-            result,
-            station_id,
+            analysis,
             text=text,
             own_text=own_text,
             peer_id=peer_id,
@@ -128,8 +134,7 @@ async def process_message(
 
 def _record(
     conn: sqlite3.Connection,
-    result: ExtractResult,
-    station_id: str | None,
+    analysis: Analysis,
     *,
     text: str,
     own_text: str,
@@ -140,6 +145,7 @@ def _record(
 ) -> PipelineOutcome:
     """Всё, что пишется по итогам разбора. Вызывается внутри транзакции —
     сам не коммитит и не открывает свою."""
+    result, station_id = analysis.result, analysis.station_id
     if result.message_type == "irrelevant":
         return PipelineOutcome("irrelevant")
 
@@ -151,6 +157,28 @@ def _record(
             # можно ответить и без резолва станции (см. qa.py).
             reply_text = answer_brand_limit_question(text)
         return PipelineOutcome("question", reply_text=reply_text)
+
+    if analysis.llm_failed:
+        # Решение Р1: когда LLM должен был разобрать сообщение, но не смог,
+        # rule-based продолжает отвечать на вопросы (текст ответа всё равно
+        # собирается из БД шаблоном), но теряет право писать факты.
+        #
+        # Причина в разной цене ошибки. Rule-based ищет отрицание только
+        # ПЕРЕД маркой и в окне 20 символов, а запятая у него не разделяет
+        # клаузы: "95 закончился" читается как "есть", "нет очереди, 95 есть"
+        # — как "нет" (находка B1). Такой факт оседает в append-only логе и
+        # повторяется в каждом будущем ответе про станцию — уже после того,
+        # как провайдер починился. Ошибка на вопросе живёт один ответ.
+        #
+        # Речь именно про АВАРИЮ. Если LLM выключен намеренно
+        # (LLM_ENABLED=false), rule-based — штатный путь и право записи у
+        # него остаётся: иначе бот в этом режиме просто перестал бы копить
+        # данные.
+        log.warning(
+            "Отчёт не записан: LLM не ответил, а rule-based писать факты не уполномочен. cmid=%s",
+            conversation_message_id,
+        )
+        return PipelineOutcome("report_suppressed_llm_down")
 
     if text != own_text and own_text and extract(own_text).message_type != "report":
         # Репорт всплыл только благодаря подклеенной цитате (форвард/реплай),
@@ -180,6 +208,7 @@ def _record(
             conversation_message_id=conversation_message_id,
             author_id=author_id,
             reported_at=reported_at,
+            source=analysis.source,
             raw_text=text,
         )
 
@@ -192,6 +221,7 @@ def _record(
             conversation_message_id=conversation_message_id,
             author_id=author_id,
             reported_at=reported_at,
+            source=analysis.source,
             raw_text=text,
         )
 
@@ -204,6 +234,7 @@ def _record(
             conversation_message_id=conversation_message_id,
             author_id=author_id,
             reported_at=reported_at,
+            source=analysis.source,
             raw_text=text,
         )
 

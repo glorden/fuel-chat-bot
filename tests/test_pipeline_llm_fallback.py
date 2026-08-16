@@ -30,7 +30,11 @@ def test_uses_llm_result_when_available(monkeypatch):
     assert row == ("rosneft_lesnoy_79", "95", "available")
 
 
-def test_falls_back_to_rule_based_when_llm_returns_none(monkeypatch):
+def test_report_is_not_written_when_llm_was_supposed_to_answer_but_failed(monkeypatch):
+    # Решение Р1. Раньше отчёт в этом случае записывался по rule-based — а
+    # тот ищет отрицание только ПЕРЕД маркой и в окне 20 символов, поэтому
+    # "95 закончился" читал как "есть" (B1). Неверный факт оседал в
+    # append-only логе и повторялся в каждом будущем ответе про станцию.
     monkeypatch.setattr(pipeline_module, "LLM_ENABLED", True)
     monkeypatch.setattr(llm.client, "analyze", lambda text, previous_message=None, quoted_context=None: None)
     conn = get_connection(":memory:")
@@ -39,7 +43,62 @@ def test_falls_back_to_rule_based_when_llm_returns_none(monkeypatch):
         conn, text="РН лесной, 95 есть на 4,5 колонке. Очередь.",
         peer_id=1, conversation_message_id=1, author_id=1,
     ))
+    assert outcome.label == "report_suppressed_llm_down"
+    assert conn.execute("SELECT COUNT(*) FROM fuel_report").fetchone()[0] == 0
+    # Сообщение всё равно считается обработанным — повторять его нечем.
+    assert conn.execute("SELECT COUNT(*) FROM processed_message").fetchone()[0] == 1
+
+
+def test_questions_are_still_answered_when_llm_failed(monkeypatch):
+    # Вторая половина Р1: отвечать бот продолжает. Текст ответа собирается
+    # из БД шаблоном, поэтому ошибка резервного пути живёт один ответ, а не
+    # оседает в базе.
+    monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
+    conn = get_connection(":memory:")
+    asyncio.run(process_message(
+        conn, text="Лукойл Вилга только 92 на табло",
+        peer_id=1, conversation_message_id=1, author_id=1,
+    ))
+
+    monkeypatch.setattr(pipeline_module, "LLM_ENABLED", True)
+    monkeypatch.setattr(llm.client, "analyze", lambda text, previous_message=None, quoted_context=None: None)
+    outcome = asyncio.run(process_message(
+        conn, text="Есть 92 в вилге?", peer_id=1, conversation_message_id=2, author_id=1,
+    ))
+    assert outcome.label == "question"
+    assert outcome.reply_text is not None
+    assert "92 - Есть" in outcome.reply_text
+
+
+def test_rule_based_keeps_write_permission_when_llm_is_off_on_purpose(monkeypatch):
+    # Гвард — про АВАРИЮ, а не про режим. При LLM_ENABLED=false rule-based
+    # штатный путь: иначе бот в этом режиме просто перестал бы копить данные.
+    monkeypatch.setattr(pipeline_module, "LLM_ENABLED", False)
+    conn = get_connection(":memory:")
+
+    outcome = asyncio.run(process_message(
+        conn, text="РН лесной, 95 есть на 4,5 колонке. Очередь.",
+        peer_id=1, conversation_message_id=1, author_id=1,
+    ))
     assert outcome.label == "report:rosneft_lesnoy_79"
+    assert conn.execute("SELECT source FROM fuel_report").fetchone()[0] == "rule_based"
+
+
+def test_facts_record_which_path_produced_them(monkeypatch):
+    monkeypatch.setattr(pipeline_module, "LLM_ENABLED", True)
+    monkeypatch.setattr(
+        llm.client,
+        "analyze",
+        lambda text, previous_message=None, quoted_context=None: LLMAnalysis(
+            extract_result=ExtractResult(message_type="report", reports=[ReportItem("95", "available")]),
+            station_id="rosneft_lesnoy_79",
+        ),
+    )
+    conn = get_connection(":memory:")
+    asyncio.run(process_message(
+        conn, text="азс, всё как обычно", peer_id=1, conversation_message_id=1, author_id=1,
+    ))
+    assert conn.execute("SELECT source FROM fuel_report").fetchone()[0] == "llm"
 
 
 def test_llm_disabled_never_calls_llm_client(monkeypatch):

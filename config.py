@@ -40,9 +40,22 @@ MIN_REPLY_GAP_SECONDS = int(os.environ.get("MIN_REPLY_GAP_SECONDS", "5"))
 LLM_ENABLED = os.environ.get("LLM_ENABLED", "false").lower() == "true"
 LLM_TIMEOUT_SECONDS = int(os.environ.get("LLM_TIMEOUT_SECONDS", "10"))
 
+LLM_PROVIDERS = ("groq", "gemini", "mistral")
+
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "mistral").strip().lower()
-if LLM_PROVIDER not in ("groq", "gemini", "mistral"):
+if LLM_PROVIDER not in LLM_PROVIDERS:
     raise ValueError(f"LLM_PROVIDER must be 'groq', 'gemini' or 'mistral', got {LLM_PROVIDER!r}")
+
+# Второй провайдер, к которому идём, если основной не ответил — прежде чем
+# откатываться на rule-based (решение Р1). Пусто — второй попытки нет,
+# поведение как раньше. Смысл в том, что rule-based теперь не пишет факты
+# (см. pipeline.py), поэтому каждый сбой основного провайдера — это ещё и
+# потерянные факты, и вторая попытка их спасает.
+LLM_FALLBACK_PROVIDER = (os.environ.get("LLM_FALLBACK_PROVIDER") or "").strip().lower() or None
+if LLM_FALLBACK_PROVIDER is not None and LLM_FALLBACK_PROVIDER not in LLM_PROVIDERS:
+    raise ValueError(
+        f"LLM_FALLBACK_PROVIDER must be one of {LLM_PROVIDERS} or empty, got {LLM_FALLBACK_PROVIDER!r}"
+    )
 
 # SOCKS5-прокси для исходящих вызовов LLM-вендоров (Groq/Gemini) — см.
 # DEPLOY.md. Пусто/не задано — прямые вызовы, поведение не меняется. Общий

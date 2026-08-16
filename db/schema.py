@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS fuel_report (
     conversation_message_id INTEGER NOT NULL,
     author_id INTEGER NOT NULL,
     reported_at TEXT NOT NULL,
-    raw_text TEXT NOT NULL
+    raw_text TEXT NOT NULL,
+    source TEXT
 );
 
 CREATE TABLE IF NOT EXISTS unresolved_mention (
@@ -52,7 +53,8 @@ CREATE TABLE IF NOT EXISTS station_break (
     conversation_message_id INTEGER NOT NULL,
     author_id INTEGER NOT NULL,
     reported_at TEXT NOT NULL,
-    raw_text TEXT NOT NULL
+    raw_text TEXT NOT NULL,
+    source TEXT
 );
 
 CREATE TABLE IF NOT EXISTS fuel_limit (
@@ -64,7 +66,8 @@ CREATE TABLE IF NOT EXISTS fuel_limit (
     conversation_message_id INTEGER NOT NULL,
     author_id INTEGER NOT NULL,
     reported_at TEXT NOT NULL,
-    raw_text TEXT NOT NULL
+    raw_text TEXT NOT NULL,
+    source TEXT
 );
 
 -- Append-only, как station_break/fuel_limit: текущее значение — последняя
@@ -91,7 +94,13 @@ _ADDED_COLUMNS = {
         "queue_minutes": "INTEGER",
         "queue_cars_from": "INTEGER",
         "queue_cars_to": "INTEGER",
+        # Чем разобрано сообщение: "llm" | "rule_based" | NULL у строк,
+        # записанных до появления колонки. Нужна, чтобы задним числом было
+        # видно происхождение факта (решение Р1).
+        "source": "TEXT",
     },
+    "station_break": {"source": "TEXT"},
+    "fuel_limit": {"source": "TEXT"},
 }
 
 
