@@ -3,7 +3,7 @@ import time
 
 from vkbottle.bot import Bot, Message
 
-from config import ADMIN_ID, AUTO_REPLY_ON_QUESTION, GROUP_ID, MIN_REPLY_GAP_SECONDS
+from config import ADMIN_ID, ALLOWED_PEER_IDS, AUTO_REPLY_ON_QUESTION, GROUP_ID, MIN_REPLY_GAP_SECONDS
 from db import repo
 from db.schema import get_connection
 from pipeline.pipeline import process_message
@@ -24,6 +24,22 @@ _last_reply_at: dict[int, float] = {}
 # FRESH_MINUTES/STALE_MINUTES) — оценка, можно поправить после живого теста.
 _last_author_message: dict[tuple[int, int], tuple[str, float]] = {}
 _AUTHOR_CONTEXT_TTL_SECONDS = 120
+
+# Беседы вне allowlist, о которых уже писали в лог — чтобы чужой чат не мог
+# залить лог одной строкой на каждое сообщение.
+_unknown_peers_logged: set[int] = set()
+
+
+def _is_allowed_peer(peer_id: int) -> bool:
+    """Обслуживаем только беседы из ALLOWED_PEER_IDS (решение Р4). Первое
+    сообщение из чужой беседы попадает в лог один раз: владелец узнаёт, что
+    сообщество куда-то добавили, а дальше тишина."""
+    if peer_id in ALLOWED_PEER_IDS:
+        return True
+    if peer_id not in _unknown_peers_logged:
+        _unknown_peers_logged.add(peer_id)
+        log.warning("Сообщение из беседы вне allowlist, игнорирую её целиком. peer_id=%s", peer_id)
+    return False
 
 
 def _can_reply(peer_id: int) -> bool:
@@ -87,6 +103,11 @@ async def _mention_tag(bot: Bot, user_id: int) -> str:
 def register_handlers(bot: Bot) -> None:
     @bot.on.message()
     async def on_message(message: Message) -> None:
+        # Гейт по беседе — первым делом, до дедупа и до разбора команд:
+        # из чужой беседы не читаем, в неё не отвечаем и ничего от неё не
+        # пишем в общую базу.
+        if not _is_allowed_peer(message.peer_id):
+            return
         if message.from_id == -GROUP_ID:
             return
         if repo.already_processed(_conn, message.peer_id, message.conversation_message_id):
