@@ -85,9 +85,11 @@ def test_with_moderation_nothing_reaches_the_chat_and_the_owner_gets_a_card(env)
     assert question.replies == []
     assert len(_sent(bot)) == 1
     card = _sent(bot)[0]
-    assert "Черновик №1" in card
-    assert "Есть 92 в вилге?" in card
+    assert card.startswith("=========\n")
+    assert "Вопрос: Есть 92 в вилге?" in card
     assert "92 - Есть" in card
+    # Номер черновика виден только в строке решения — отдельной шапки нет.
+    assert "+1 — отправить, -1 — отклонить." in card
     assert bot.api.sent[0]["peer_id"] == ADMIN
 
 

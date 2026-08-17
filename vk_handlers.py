@@ -385,10 +385,14 @@ def _render_draft_card(draft: _PendingDraft) -> str:
     question = (draft.message.text or "").strip()
     if len(question) > 200:
         question = f"{question[:200]}…"
+    # Шапка с номером и беседой убрана по правке владельца: номер и так
+    # виден в строке решения ниже, а карточек в личке идёт поток — разделяет
+    # их черта, а не заголовок.
     return (
-        f"Черновик №{draft.number} · беседа {draft.message.peer_id}\n\n"
-        f"Спросили: {question}\n\n"
-        f"Ответ: {draft.text}\n\n"
+        "=========\n"
+        f"Вопрос: {question}\n"
+        f"Ответ: {draft.text}\n"
+        "\n"
         f"+{draft.number} — отправить, -{draft.number} — отклонить.\n"
         f"Без ответа протухнет за {MODERATION_TTL_MINUTES} мин."
     )
