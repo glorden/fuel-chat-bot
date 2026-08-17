@@ -48,6 +48,15 @@ _AUTHOR_CONTEXT_TTL_SECONDS = 120
 # залить лог одной строкой на каждое сообщение.
 _unknown_peers_logged: set[int] = set()
 
+# У беседы peer_id всегда 2000000000 + номер, у личного сообщения он равен
+# VK-id отправителя. Проверено живьём на Long Poll, а не выведено из
+# документации: личное сообщение сообществу приходит обычным message_new.
+_CHAT_PEER_BASE = 2000000000
+
+# Отпечатки тех, кто писал в личку не будучи владельцем — тот же приём, что
+# и _unknown_peers_logged: одна строка на человека, а не на сообщение.
+_foreign_private_logged: set[str] = set()
+
 # Алерты владельцу: не чаще одного в 10 минут, чтобы повторяющийся сбой не
 # превратился в поток сообщений в личку.
 _RETENTION_INTERVAL_SECONDS = 3600
@@ -59,16 +68,38 @@ _ALERT_MIN_GAP_SECONDS = 600
 _last_alert_at = float("-inf")
 
 
+def _is_private_peer(peer_id: int) -> bool:
+    """Личное сообщение сообществу, а не сообщение из беседы."""
+    return peer_id < _CHAT_PEER_BASE
+
+
 def _is_allowed_peer(peer_id: int) -> bool:
     """Обслуживаем только беседы из ALLOWED_PEER_IDS (решение Р4). Первое
     сообщение из чужой беседы попадает в лог один раз: владелец узнаёт, что
-    сообщество куда-то добавили, а дальше тишина."""
+    сообщество куда-то добавили, а дальше тишина.
+
+    Сюда доходят только беседы: личку разбирает отдельная ветка в
+    handle_message, и это важно для лога — у личного сообщения peer_id
+    равен VK-id человека, а у беседы это безобидный 2000000001."""
     if peer_id in ALLOWED_PEER_IDS:
         return True
     if peer_id not in _unknown_peers_logged:
         _unknown_peers_logged.add(peer_id)
         log.warning("Сообщение из беседы вне allowlist, игнорирую её целиком. peer_id=%s", peer_id)
     return False
+
+
+def _log_foreign_private_message(author_id: int) -> None:
+    """Личка не от владельца: игнорируем молча, но один раз отмечаем в логе.
+
+    Без peer_id и без from_id — в личке это одно и то же число, VK-id
+    человека, а идентификаторам в логе не место (решение Р7, находки K1/F4).
+    Отпечаток отличает одного писавшего от другого, никого не называя."""
+    fingerprint = author_fingerprint(author_id)[:8]
+    if fingerprint in _foreign_private_logged:
+        return
+    _foreign_private_logged.add(fingerprint)
+    log.warning("Личное сообщение не от владельца, игнорирую. автор=%s", fingerprint)
 
 
 def _can_reply(peer_id: int, author_id: int) -> bool:
@@ -177,6 +208,31 @@ def _is_limit_list_command(text: str) -> bool:
     return text.strip().lower() in ("!лимит", "!лимиты")
 
 
+_PRIVATE_HELP = (
+    "Команды:\n"
+    "!вкл — включить автоответ на вопросы\n"
+    "!выкл — выключить автоответ\n"
+    "!помощь — этот список"
+)
+
+
+def _parse_private_command(text: str) -> tuple[str, str] | None:
+    """Разбор команды из лички: "!имя" плюс необязательный аргумент.
+    None — если это вообще не похоже на команду.
+
+    В беседе команды принимаются только целой строкой без хвостов
+    (_parse_admin_command, _is_limit_list_command): там любое сообщение
+    может оказаться обычной репликой по теме, и строгость — защита от
+    ложного срабатывания. В личке этой опасности нет, единственный
+    отправитель тут владелец и пишет он боту. Поэтому разбор свободнее и
+    допускает аргумент — он понадобится командам вроде "!ошибка <станция>"."""
+    normalized = text.strip()
+    if not normalized.startswith("!"):
+        return None
+    name, _, argument = normalized.partition(" ")
+    return name.lower(), argument.strip()
+
+
 async def _mention_tag(bot: Bot, user_id: int) -> str:
     """Тег вида "[id...|Имя], " для явного упоминания адресата в ответе.
     Пустая строка, если user_id — не пользователь (например, сообщение
@@ -212,6 +268,50 @@ async def _reply_with_retry(message: Message, text: str) -> bool:
                 attempt, message.peer_id, message.conversation_message_id, exc_info=True,
             )
     return False
+
+
+async def _send_private(bot: Bot, peer_id: int, text: str) -> bool:
+    """Ответ в личку — через messages.send, а не message.reply: этот путь уже
+    проверен живьём на алертах владельцу (решение Р8) и не зависит от того,
+    как VK трактует «ответ на сообщение» в личной переписке.
+
+    В лог не попадает peer_id: в личке это VK-id человека (см.
+    _log_foreign_private_message)."""
+    for attempt in (1, 2):
+        try:
+            await bot.api.messages.send(
+                peer_id=peer_id,
+                random_id=random.randint(1, 2**31 - 1),
+                message=text,
+            )
+            return True
+        except Exception:
+            log.warning("Не удалось ответить в личку (попытка %s из 2)", attempt, exc_info=True)
+    return False
+
+
+async def _handle_private_command(bot: Bot, message: Message) -> None:
+    """Команды владельца в личке. Ни один путь отсюда не пишет факты и не
+    читает базу станций — это канал управления, а не третий источник данных
+    (см. handle_message)."""
+    parsed = _parse_private_command(message.text or "")
+    if parsed is None:
+        await _send_private(bot, message.peer_id, _PRIVATE_HELP)
+        return
+
+    name, _argument = parsed
+    if name in ("!вкл", "!выкл"):
+        enabled = name == "!вкл"
+        repo.set_auto_reply_enabled(_conn, enabled=enabled, changed_by=message.from_id)
+        state = "включён" if enabled else "выключен"
+        await _send_private(bot, message.peer_id, f"Автоответ на вопросы {state}.")
+        return
+
+    if name in ("!помощь", "!команды"):
+        await _send_private(bot, message.peer_id, _PRIVATE_HELP)
+        return
+
+    await _send_private(bot, message.peer_id, f"Не знаю команду «{name}».\n\n{_PRIVATE_HELP}")
 
 
 async def _alert_owner(bot: Bot, summary: str) -> None:
@@ -272,12 +372,29 @@ async def handle_message(bot: Bot, message: Message) -> None:
     """Тело обработчика. Вынесено из замыкания, чтобы вокруг него можно
     было поставить один перехват (см. register_handlers) и чтобы его можно
     было вызывать в тестах напрямую."""
-    # Гейт по беседе — первым делом, до дедупа и до разбора команд:
-    # из чужой беседы не читаем, в неё не отвечаем и ничего от неё не
-    # пишем в общую базу.
-    if not _is_allowed_peer(message.peer_id):
-        return
+    # Собственные сообщения бота не разбираем ни в беседе, ни в личке —
+    # иначе ответ на команду вернулся бы к нему же как новая команда.
     if message.from_id == -GROUP_ID:
+        return
+
+    # Личка владельца — канал управления, и ветка стоит до гейта по
+    # allowlist сознательно. Решение Р4 этим не размывается: гейт охраняет
+    # БЕСЕДЫ, из которых берутся и в которые уходят факты, а здесь не
+    # пишется и не читается ни одного факта — только команды. Чужая личка
+    # не получает ответа вообще, даже сообщения о том, что она чужая.
+    if _is_private_peer(message.peer_id):
+        if ADMIN_ID is None or message.peer_id != ADMIN_ID:
+            _log_foreign_private_message(message.from_id)
+            return
+        if repo.already_processed(_conn, message.peer_id, message.conversation_message_id):
+            return
+        await _handle_private_command(bot, message)
+        _mark_processed(message.peer_id, message.conversation_message_id)
+        return
+
+    # Гейт по беседе — до дедупа и до разбора команд: из чужой беседы не
+    # читаем, в неё не отвечаем и ничего от неё не пишем в общую базу.
+    if not _is_allowed_peer(message.peer_id):
         return
     if repo.already_processed(_conn, message.peer_id, message.conversation_message_id):
         return
