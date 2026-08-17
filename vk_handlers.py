@@ -1,11 +1,20 @@
 import logging
 import random
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from vkbottle.bot import Bot, Message
 
-from config import ADMIN_ID, ALLOWED_PEER_IDS, AUTO_REPLY_ON_QUESTION, GROUP_ID, MIN_REPLY_GAP_SECONDS
+from config import (
+    ADMIN_ID,
+    ALLOWED_PEER_IDS,
+    AUTO_REPLY_ON_QUESTION,
+    GROUP_ID,
+    MIN_REPLY_GAP_SECONDS,
+    MODERATION_ON_REPLY,
+    MODERATION_TTL_MINUTES,
+)
 from db import repo
 from db.retention import apply_retention
 from db.schema import get_connection
@@ -56,6 +65,30 @@ _CHAT_PEER_BASE = 2000000000
 # Отпечатки тех, кто писал в личку не будучи владельцем — тот же приём, что
 # и _unknown_peers_logged: одна строка на человека, а не на сообщение.
 _foreign_private_logged: set[str] = set()
+
+
+@dataclass
+class _PendingDraft:
+    """Готовый ответ, ждущий "+N" от владельца. Держим сам объект сообщения,
+    чтобы отправить ответ ровно туда же, куда он ушёл бы без модерации."""
+
+    number: int
+    message: Message
+    text: str
+    created_at: float
+
+
+# Черновики живут в памяти, а не в БД: срок их жизни — минуты, и переживать
+# рестарт им незачем. Прецедент — _last_author_message. Порядок вставки
+# сохраняется, на нём же держится голое "+" (подтвердить последний).
+_pending_drafts: dict[int, _PendingDraft] = {}
+_MODERATION_TTL_SECONDS = MODERATION_TTL_MINUTES * 60
+
+# Номера черновиков короткие и переиспользуются по кругу: набирать "+7" с
+# телефона проще, чем "+2137", а столкнуться двум живым черновикам с одним
+# номером мешает срок жизни — их одновременно единицы, не сотня.
+_DRAFT_NUMBER_CAP = 99
+_draft_counter = 0
 
 # Алерты владельцу: не чаще одного в 10 минут, чтобы повторяющийся сбой не
 # превратился в поток сообщений в личку.
@@ -212,6 +245,9 @@ _PRIVATE_HELP = (
     "Команды:\n"
     "!вкл — включить автоответ на вопросы\n"
     "!выкл — выключить автоответ\n"
+    "!модерация [вкл|выкл] — ответы ждут подтверждения здесь\n"
+    "+7 / -7 — отправить или отклонить черновик №7\n"
+    "+ / - — то же для последнего черновика\n"
     "!помощь — этот список"
 )
 
@@ -290,21 +326,178 @@ async def _send_private(bot: Bot, peer_id: int, text: str) -> bool:
     return False
 
 
+def _moderation_enabled() -> bool:
+    """Живое состояние из БД; MODERATION_ON_REPLY — дефолт, пока командой не
+    пользовались.
+
+    Без ADMIN_ID модерация невозможна: подтверждать некому, и включённый
+    режим означал бы, что бот молча съедает все ответы. В этом случае
+    отвечаем напрямую и говорим об этом в лог — тихо деградировать в
+    молчание тут хуже всего (находки G3-G5)."""
+    if not repo.get_moderation_enabled(_conn, default=MODERATION_ON_REPLY):
+        return False
+    if ADMIN_ID is None:
+        log.warning("Модерация включена, но ADMIN_ID не задан — подтверждать некому, отвечаю напрямую")
+        return False
+    return True
+
+
+def _sweep_expired_drafts() -> list[int]:
+    """Протухшие черновики удаляются и НЕ отправляются. Автоотправка по
+    таймауту убила бы весь смысл режима, а сам ответ к этому времени уже
+    несёт неверное по смыслу время: в тексте стоит абсолютное «на 18:40»."""
+    now = time.monotonic()
+    expired = [n for n, d in _pending_drafts.items() if now - d.created_at >= _MODERATION_TTL_SECONDS]
+    for number in expired:
+        del _pending_drafts[number]
+    if expired:
+        log.info(
+            "Черновики протухли и не будут отправлены: %s",
+            ", ".join(f"№{n}" for n in expired),
+        )
+    return expired
+
+
+def _render_draft_card(draft: _PendingDraft) -> str:
+    question = (draft.message.text or "").strip()
+    if len(question) > 200:
+        question = f"{question[:200]}…"
+    return (
+        f"Черновик №{draft.number} · беседа {draft.message.peer_id}\n\n"
+        f"Спросили: {question}\n\n"
+        f"Ответ: {draft.text}\n\n"
+        f"+{draft.number} — отправить, -{draft.number} — отклонить.\n"
+        f"Без ответа протухнет за {MODERATION_TTL_MINUTES} мин."
+    )
+
+
+async def _queue_draft(bot: Bot, message: Message, text: str) -> None:
+    global _draft_counter
+    _sweep_expired_drafts()
+    _draft_counter = (_draft_counter % _DRAFT_NUMBER_CAP) + 1
+    draft = _PendingDraft(
+        number=_draft_counter, message=message, text=text, created_at=time.monotonic()
+    )
+    # Черновик, о котором владелец не узнал, ждать нечего — если карточка не
+    # доставлена, не копим его в памяти.
+    if not await _send_private(bot, ADMIN_ID, _render_draft_card(draft)):
+        log.warning("Черновик №%s не доставлен владельцу, ответ не уйдёт", draft.number)
+        return
+    _pending_drafts[draft.number] = draft
+    log.info("Черновик №%s ждёт подтверждения. peer_id=%s", draft.number, message.peer_id)
+
+
+def _parse_moderation_verdict(text: str) -> tuple[bool, int | None] | None:
+    """"+7"/"-7" — решение по конкретному черновику, голые "+"/"-" — по
+    последнему. None — если это вообще не вердикт."""
+    normalized = text.strip()
+    if not normalized or normalized[0] not in "+-":
+        return None
+    approve = normalized[0] == "+"
+    rest = normalized[1:].strip()
+    if not rest:
+        return approve, None
+    if not rest.isdigit():
+        return None
+    return approve, int(rest)
+
+
+async def _resolve_draft(bot: Bot, peer_id: int, approve: bool, number: int | None) -> None:
+    _sweep_expired_drafts()
+
+    if number is None:
+        # Голое "+"/"-" — про последний добавленный черновик (порядок
+        # вставки), и только тут пустая очередь это отдельный случай: назвать
+        # в ответе нечего.
+        if not _pending_drafts:
+            await _send_private(
+                bot,
+                peer_id,
+                f"Черновиков нет — либо все решены, либо протухли ({MODERATION_TTL_MINUTES} мин).",
+            )
+            return
+        number = next(reversed(_pending_drafts))
+
+    draft = _pending_drafts.pop(number, None)
+    if draft is None:
+        await _send_private(
+            bot,
+            peer_id,
+            f"Черновик №{number} не найден: либо уже решён, либо протух ({MODERATION_TTL_MINUTES} мин).",
+        )
+        return
+
+    if not approve:
+        log.info("Черновик №%s отклонён владельцем", draft.number)
+        await _send_private(bot, peer_id, f"Черновик №{draft.number} отклонён, в беседу ничего не ушло.")
+        return
+
+    # Отправляем ровно то, что владелец одобрил, — не пересчитываем ответ
+    # заново: иначе он подтвердил бы один текст, а в беседу ушёл бы другой.
+    if await _reply_with_retry(draft.message, draft.text):
+        log.info("Черновик №%s отправлен в беседу. peer_id=%s", draft.number, draft.message.peer_id)
+        await _send_private(bot, peer_id, f"Черновик №{draft.number} отправлен.")
+    else:
+        await _send_private(bot, peer_id, f"Черновик №{draft.number} отправить не удалось, VK не принял.")
+
+
 async def _handle_private_command(bot: Bot, message: Message) -> None:
     """Команды владельца в личке. Ни один путь отсюда не пишет факты и не
     читает базу станций — это канал управления, а не третий источник данных
     (см. handle_message)."""
-    parsed = _parse_private_command(message.text or "")
+    text = message.text or ""
+
+    # Вердикт по черновику разбирается первым: "+7" не начинается с "!" и
+    # иначе утонул бы в подсказке.
+    verdict = _parse_moderation_verdict(text)
+    if verdict is not None:
+        approve, number = verdict
+        log.info(
+            "Вердикт владельца по черновику %s: %s",
+            f"№{number}" if number is not None else "последнему",
+            "отправить" if approve else "отклонить",
+        )
+        await _resolve_draft(bot, message.peer_id, approve, number)
+        return
+
+    parsed = _parse_private_command(text)
     if parsed is None:
+        log.info("Личное сообщение владельца — не команда, отвечаю подсказкой")
         await _send_private(bot, message.peer_id, _PRIVATE_HELP)
         return
 
-    name, _argument = parsed
+    # Имя команды в логе — без аргумента и без текста участника: команду
+    # владелец пишет сам, а вот аргумент может нести название станции из
+    # чужого сообщения (решение Р7).
+    name, argument = parsed
+    log.info("Личная команда %s", name)
+
     if name in ("!вкл", "!выкл"):
         enabled = name == "!вкл"
         repo.set_auto_reply_enabled(_conn, enabled=enabled, changed_by=message.from_id)
         state = "включён" if enabled else "выключен"
         await _send_private(bot, message.peer_id, f"Автоответ на вопросы {state}.")
+        return
+
+    if name == "!модерация":
+        mode = argument.lower()
+        if mode in ("вкл", "on"):
+            repo.set_moderation_enabled(_conn, enabled=True, changed_by=message.from_id)
+            await _send_private(
+                bot, message.peer_id, "Модерация включена: ответы приходят сюда на подтверждение."
+            )
+            return
+        if mode in ("выкл", "off"):
+            repo.set_moderation_enabled(_conn, enabled=False, changed_by=message.from_id)
+            await _send_private(bot, message.peer_id, "Модерация выключена: ответы уходят в беседу сразу.")
+            return
+        state = "включена" if _moderation_enabled() else "выключена"
+        await _send_private(
+            bot,
+            message.peer_id,
+            f"Модерация {state}. Черновиков ждёт: {len(_pending_drafts)}.\n"
+            "«!модерация вкл» / «!модерация выкл» — переключить.",
+        )
         return
 
     if name in ("!помощь", "!команды"):
@@ -471,7 +664,17 @@ async def handle_message(bot: Bot, message: Message) -> None:
 
     _note_reply(message.peer_id, message.from_id)
     tag = await _mention_tag(bot, message.from_id)
-    await _reply_with_retry(message, f"{tag}{reply_text}")
+    answer = f"{tag}{reply_text}"
+
+    # Модерация гейтит только исходящий текст. Факты к этому моменту уже
+    # записаны (process_message выше), дебаунс и потолок уже отработали —
+    # то есть во время теста бот продолжает копить базу ровно как обычно,
+    # придерживается только публикация.
+    if _moderation_enabled():
+        await _queue_draft(bot, message, answer)
+        return
+
+    await _reply_with_retry(message, answer)
 
 
 def register_handlers(bot: Bot) -> None:

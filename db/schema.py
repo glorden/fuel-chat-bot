@@ -84,6 +84,23 @@ CREATE TABLE IF NOT EXISTS auto_reply_setting (
     changed_by INTEGER NOT NULL,
     changed_at TEXT NOT NULL
 );
+
+-- Режим модерации: ответ не уходит в беседу сразу, а ждёт подтверждения
+-- владельца в личке (команда !модерация). Форма и смысл те же, что у
+-- auto_reply_setting — append-only, последняя строка побеждает. Отдельная
+-- таблица, а не колонка рядом: это независимый переключатель, и общая
+-- строка заставляла бы писать обе настройки при смене любой из них.
+--
+-- Сами черновики сюда НЕ пишутся: они живут в памяти процесса и протухают
+-- за MODERATION_TTL_MINUTES. Ответ старше этого срока всё равно бесполезен
+-- (в нём стоит абсолютное время, а спросивший давно уехал), поэтому
+-- переживать рестарт им незачем.
+CREATE TABLE IF NOT EXISTS moderation_setting (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    enabled INTEGER NOT NULL,
+    changed_by INTEGER NOT NULL,
+    changed_at TEXT NOT NULL
+);
 """
 
 

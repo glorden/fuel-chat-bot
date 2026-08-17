@@ -33,6 +33,15 @@ def _parse_allowed_peer_ids(raw: str | None) -> frozenset[int]:
 ALLOWED_PEER_IDS = _parse_allowed_peer_ids(os.environ.get("ALLOWED_PEER_IDS"))
 ADMIN_ID = int(os.environ["ADMIN_ID"]) if os.environ.get("ADMIN_ID") else None
 AUTO_REPLY_ON_QUESTION = os.environ.get("AUTO_REPLY_ON_QUESTION", "false").lower() == "true"
+
+# Модерация ответов: готовый текст уходит владельцу в личку и ждёт "+N",
+# прежде чем попасть в беседу. Как и AUTO_REPLY_ON_QUESTION, это только
+# значение по умолчанию — живое состояние в БД (moderation_setting),
+# переключается командой !модерация. Черновик, не подтверждённый за
+# MODERATION_TTL_MINUTES, просто не отправляется: автоотправки по таймауту
+# нет и быть не должно, иначе режим теряет смысл.
+MODERATION_ON_REPLY = os.environ.get("MODERATION_ON_REPLY", "false").lower() == "true"
+MODERATION_TTL_MINUTES = int(os.environ.get("MODERATION_TTL_MINUTES", "15"))
 FRESH_MINUTES = int(os.environ.get("FRESH_MINUTES", "240"))
 STALE_MINUTES = int(os.environ.get("STALE_MINUTES", "480"))
 MIN_REPLY_GAP_SECONDS = int(os.environ.get("MIN_REPLY_GAP_SECONDS", "5"))

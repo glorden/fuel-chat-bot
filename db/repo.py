@@ -148,6 +148,24 @@ def get_auto_reply_enabled(conn: sqlite3.Connection, *, default: bool) -> bool:
     return bool(row[0]) if row is not None else default
 
 
+def set_moderation_enabled(conn: sqlite3.Connection, *, enabled: bool, changed_by: int) -> None:
+    """Как set_auto_reply_enabled: вне пайплайна, поэтому коммитит сама."""
+    conn.execute(
+        "INSERT INTO moderation_setting (enabled, changed_by, changed_at) VALUES (?, ?, ?)",
+        (int(enabled), changed_by, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+
+
+def get_moderation_enabled(conn: sqlite3.Connection, *, default: bool) -> bool:
+    """Последняя строка побеждает. default — MODERATION_ON_REPLY из .env,
+    пока командой !модерация не воспользовались ни разу."""
+    row = conn.execute(
+        "SELECT enabled FROM moderation_setting ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    return bool(row[0]) if row is not None else default
+
+
 def insert_unresolved_mention(
     conn: sqlite3.Connection,
     *,
