@@ -90,10 +90,12 @@ def test_answer_question_fresh_fact_has_no_staleness_caveat():
     conn = get_connection(":memory:")
     _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue=QueueInfo(status="none"), minutes_ago=5)
     text = answer_question(conn, station_id="lukoil_vilga", grades=["92"])
-    assert re.search(r"на \d{2}:\d{2}, без очереди\.", text)
+    assert re.search(r"^инфа на \d{2}-\d{2}\.", text)
     assert "92 - Есть" in text
     assert "устарело" not in text
     assert "старые" not in text
+    # Про очередь не спрашивали — её в ответе нет, хотя в базе она есть.
+    assert "очеред" not in text
 
 
 def test_answer_question_stale_and_very_stale_fact_show_caveats():
@@ -131,10 +133,17 @@ def test_answer_question_groups_same_status_grades_on_one_line():
     conn = get_connection(":memory:")
     _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue=None, minutes_ago=5)
     _insert_report(conn, station_id="lukoil_vilga", grade="95", status="available", queue=None, minutes_ago=5)
-    _insert_report(conn, station_id="lukoil_vilga", grade="98", status="unavailable", queue=None, minutes_ago=5)
-    text = answer_question(conn, station_id="lukoil_vilga", grades=["92", "95", "98"])
+    text = answer_question(conn, station_id="lukoil_vilga", grades=["92", "95"])
     assert "92, 95 - Есть" in text
-    assert "98 - Нет" in text
+
+
+def test_answer_question_splits_grades_with_different_statuses():
+    conn = get_connection(":memory:")
+    _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue=None, minutes_ago=5)
+    _insert_report(conn, station_id="lukoil_vilga", grade="95", status="unavailable", queue=None, minutes_ago=5)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=["92", "95"])
+    assert "92 - Есть" in text
+    assert "95 - Нет" in text
 
 
 def test_answer_question_header_time_matches_freshest_report():
@@ -142,7 +151,7 @@ def test_answer_question_header_time_matches_freshest_report():
     _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue=None, minutes_ago=120)
     _insert_report(conn, station_id="lukoil_vilga", grade="95", status="available", queue=None, minutes_ago=5)
     text = answer_question(conn, station_id="lukoil_vilga", grades=["92", "95"])
-    expected_time = (datetime.now(timezone.utc) - timedelta(minutes=5)).astimezone(MOSCOW_TZ).strftime("%H:%M")
+    expected_time = (datetime.now(timezone.utc) - timedelta(minutes=5)).astimezone(MOSCOW_TZ).strftime("%H-%M")
     assert expected_time in text
 
 
@@ -150,9 +159,22 @@ def test_answer_question_differing_queue_notes_shown_per_group():
     conn = get_connection(":memory:")
     _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue=QueueInfo(status="none"), minutes_ago=5)
     _insert_report(conn, station_id="lukoil_vilga", grade="95", status="available", queue=QueueInfo(status="present", minutes=15), minutes_ago=5)
-    text = answer_question(conn, station_id="lukoil_vilga", grades=["92", "95"])
+    text = answer_question(
+        conn, station_id="lukoil_vilga", grades=["92", "95"], question_text="какая очередь?"
+    )
     assert "92 - Есть, без очереди" in text
     assert "95 - Есть, ~15 мин" in text
+
+
+def test_queue_is_absent_when_nobody_asked_about_it():
+    """Раньше очередь всегда ехала в ответ и заодно дробила группы марок."""
+    conn = get_connection(":memory:")
+    _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue=QueueInfo(status="none"), minutes_ago=5)
+    _insert_report(conn, station_id="lukoil_vilga", grade="95", status="available", queue=QueueInfo(status="present", minutes=15), minutes_ago=5)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=["92", "95"], question_text="95 есть?")
+    assert "92, 95 - Есть" in text
+    assert "очеред" not in text
+    assert "мин" not in text
 
 
 def test_answer_question_shows_break_with_no_fuel_facts_at_all():
@@ -161,21 +183,40 @@ def test_answer_question_shows_break_with_no_fuel_facts_at_all():
     # содержательно ответить.
     conn = get_connection(":memory:")
     _insert_break(conn, station_id="lukoil_vilga", kind="слив", until=None, duration_note="минут 40", minutes_ago=10)
-    text = answer_question(conn, station_id="lukoil_vilga", grades=[])
+    text = answer_question(conn, station_id="lukoil_vilga", grades=[], question_text="есть перерыв?")
     assert text is not None
     assert "слив бензовоза" in text
     assert "минут 40" in text
 
 
 def test_answer_question_shows_break_alongside_fuel_facts():
-    # По решению пользователя — перерыв и факты по маркам показываются
-    # вместе, одно не подменяет другое.
     conn = get_connection(":memory:")
     _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue=None, minutes_ago=5)
     _insert_break(conn, station_id="lukoil_vilga", kind="перерыв", until=None, duration_note=None, minutes_ago=5)
-    text = answer_question(conn, station_id="lukoil_vilga", grades=["92"])
+    text = answer_question(
+        conn, station_id="lukoil_vilga", grades=["92"], question_text="92 есть, перерыв не начался?"
+    )
     assert "технический перерыв" in text
     assert "92 - Есть" in text
+
+
+def test_break_is_absent_when_nobody_asked_about_it():
+    """Разворот прежнего решения «перерыв и марки показываем вместе»
+    (Этап 42): спросили про 92 — отвечаем про 92."""
+    conn = get_connection(":memory:")
+    _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue=None, minutes_ago=5)
+    _insert_break(conn, station_id="lukoil_vilga", kind="перерыв", until=None, duration_note=None, minutes_ago=5)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=["92"], question_text="92 есть?")
+    assert "92 - Есть" in text
+    assert "перерыв" not in text
+
+
+def test_a_fuel_truck_question_counts_as_asking_about_a_break():
+    conn = get_connection(":memory:")
+    _insert_break(conn, station_id="lukoil_vilga", kind="слив", until=None, duration_note=None, minutes_ago=5)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=[], question_text="бензовоз приезжал?")
+    assert text is not None
+    assert "слив бензовоза" in text
 
 
 def test_answer_question_break_shown_regardless_of_age_no_active_window():
@@ -184,7 +225,7 @@ def test_answer_question_break_shown_regardless_of_age_no_active_window():
     # всё ещё упоминается (с возрастом — человек сам решает, актуально ли).
     conn = get_connection(":memory:")
     _insert_break(conn, station_id="lukoil_vilga", kind="слив", until=None, duration_note=None, minutes_ago=600)
-    text = answer_question(conn, station_id="lukoil_vilga", grades=[])
+    text = answer_question(conn, station_id="lukoil_vilga", grades=[], question_text="перерыв есть?")
     assert text is not None
     assert "слив бензовоза" in text
     assert "10 ч" in text
@@ -194,7 +235,7 @@ def test_answer_question_break_with_until_shows_clock_time_not_age():
     conn = get_connection(":memory:")
     until = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
     _insert_break(conn, station_id="gazprom", kind="перерыв", until=until, duration_note=None, minutes_ago=5)
-    text = answer_question(conn, station_id="gazprom", grades=[])
+    text = answer_question(conn, station_id="gazprom", grades=[], question_text="перерыв до скольки?")
     assert "ожидается до" in text
 
 
@@ -202,7 +243,7 @@ def test_answer_question_uses_latest_break_not_older_one():
     conn = get_connection(":memory:")
     _insert_break(conn, station_id="lukoil_vilga", kind="слив", until=None, duration_note="минут 20", minutes_ago=60)
     _insert_break(conn, station_id="lukoil_vilga", kind="отстой", until=None, duration_note="минут 40", minutes_ago=5)
-    text = answer_question(conn, station_id="lukoil_vilga", grades=[])
+    text = answer_question(conn, station_id="lukoil_vilga", grades=[], question_text="перерыв?")
     assert "отстой топлива" in text
     assert "слив бензовоза" not in text
 
@@ -210,7 +251,7 @@ def test_answer_question_uses_latest_break_not_older_one():
 def test_answer_question_shows_limit_with_no_fuel_facts_at_all():
     conn = get_connection(":memory:")
     _insert_limit(conn, station_id="lukoil_vilga", status="limited", liters=30, minutes_ago=10)
-    text = answer_question(conn, station_id="lukoil_vilga", grades=[])
+    text = answer_question(conn, station_id="lukoil_vilga", grades=[], question_text="какой лимит?")
     assert text is not None
     assert "лимит 30 л" in text
 
@@ -218,18 +259,29 @@ def test_answer_question_shows_limit_with_no_fuel_facts_at_all():
 def test_answer_question_shows_unlimited_status():
     conn = get_connection(":memory:")
     _insert_limit(conn, station_id="gazprom", status="unlimited", liters=None, minutes_ago=10)
-    text = answer_question(conn, station_id="gazprom", grades=[])
+    text = answer_question(conn, station_id="gazprom", grades=[], question_text="есть ограничение?")
     assert "лимита нет" in text
 
 
+def test_limit_is_absent_when_nobody_asked_about_it():
+    """Живой повод (Этап 42): в базе лежал «лимит 8 л», вычитанный из «на 8
+    часов только ДТ», и уезжал в каждый ответ по станции."""
+    conn = get_connection(":memory:")
+    _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue=None, minutes_ago=5)
+    _insert_limit(conn, station_id="lukoil_vilga", status="limited", liters=8, minutes_ago=5)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=["92"], question_text="92 есть?")
+    assert "92 - Есть" in text
+    assert "лимит" not in text
+
+
 def test_answer_question_shows_limit_alongside_fuel_facts_and_break():
-    # Все три вида фактов — марки, перерыв, лимит — показываются вместе,
-    # ни один не подменяет другой.
     conn = get_connection(":memory:")
     _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue=None, minutes_ago=5)
     _insert_break(conn, station_id="lukoil_vilga", kind="перерыв", until=None, duration_note=None, minutes_ago=5)
     _insert_limit(conn, station_id="lukoil_vilga", status="limited", liters=20, minutes_ago=5)
-    text = answer_question(conn, station_id="lukoil_vilga", grades=["92"])
+    text = answer_question(
+        conn, station_id="lukoil_vilga", grades=["92"], question_text="92 есть? перерыв? лимит какой?"
+    )
     assert "92 - Есть" in text
     assert "технический перерыв" in text
     assert "лимит 20 л" in text
@@ -239,9 +291,65 @@ def test_answer_question_uses_latest_limit_not_older_one():
     conn = get_connection(":memory:")
     _insert_limit(conn, station_id="lukoil_vilga", status="limited", liters=20, minutes_ago=60)
     _insert_limit(conn, station_id="lukoil_vilga", status="unlimited", liters=None, minutes_ago=5)
-    text = answer_question(conn, station_id="lukoil_vilga", grades=[])
+    text = answer_question(conn, station_id="lukoil_vilga", grades=[], question_text="лимит какой?")
     assert "лимита нет" in text
     assert "лимит 20 л" not in text
+
+
+def test_diesel_never_appears_in_an_answer():
+    """ДТ отслеживаем, но не отвечаем: чат про бензин (решение Этапа 42)."""
+    conn = get_connection(":memory:")
+    _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue=None, minutes_ago=5)
+    _insert_report(conn, station_id="lukoil_vilga", grade="ДТ", status="available", queue=None, minutes_ago=5)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=[], question_text="что есть?")
+    assert "92 - Есть" in text
+    assert "ДТ" not in text
+
+
+def test_a_question_only_about_diesel_gets_silence():
+    conn = get_connection(":memory:")
+    _insert_report(conn, station_id="lukoil_vilga", grade="ДТ", status="available", queue=None, minutes_ago=5)
+    assert answer_question(conn, station_id="lukoil_vilga", grades=["ДТ"], question_text="дт есть?") is None
+
+
+def test_a_question_only_about_98_gets_silence():
+    """98 и 100 убраны из отслеживания целиком (Этап 42). Старые строки в
+    базе остались — append-only, — но в ответ не попадают.
+
+    Ловушка, найденная при живом прогоне: раз 98 выпала из извлечения,
+    вопрос «98 есть?» приходит с ПУСТЫМ question_grades, то есть выглядит
+    как вопрос вообще без марки — и без отдельной проверки получал бы
+    бодрый ответ про 92 и 95."""
+    conn = get_connection(":memory:")
+    _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue=None, minutes_ago=5)
+    assert answer_question(conn, station_id="lukoil_vilga", grades=[], question_text="98 есть?") is None
+    assert answer_question(conn, station_id="lukoil_vilga", grades=[], question_text="а 100 бенз?") is None
+
+
+def test_a_tracked_grade_next_to_an_untracked_one_is_still_answered():
+    conn = get_connection(":memory:")
+    _insert_report(conn, station_id="lukoil_vilga", grade="95", status="available", queue=None, minutes_ago=5)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=["95"], question_text="95 и 98 есть?")
+    assert "95 - Есть" in text
+
+
+def test_a_break_question_mentioning_98_still_gets_the_break():
+    """Молчим про марку, а не про станцию: вопрос про слив остаётся вопросом
+    про слив, даже если рядом названа марка, которую мы не отслеживаем."""
+    conn = get_connection(":memory:")
+    _insert_break(conn, station_id="lukoil_vilga", kind="слив", until=None, duration_note=None, minutes_ago=5)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=[], question_text="98 после слива будет?")
+    assert text is not None
+    assert "слив бензовоза" in text
+
+
+def test_old_98_rows_do_not_leak_into_a_general_question():
+    conn = get_connection(":memory:")
+    _insert_report(conn, station_id="lukoil_vilga", grade="98", status="available", queue=None, minutes_ago=5)
+    _insert_report(conn, station_id="lukoil_vilga", grade="92", status="available", queue=None, minutes_ago=5)
+    text = answer_question(conn, station_id="lukoil_vilga", grades=[], question_text="что есть?")
+    assert "92 - Есть" in text
+    assert "98" not in text
 
 
 def test_answer_brand_limit_question_real_chat_phrasings():
@@ -299,5 +407,7 @@ def test_structured_queue_survives_the_round_trip_through_the_db():
         conn, station_id="lukoil_vilga", grade="92", status="available",
         queue=QueueInfo(status="present", cars_from=3, cars_to=4), minutes_ago=5,
     )
-    text = answer_question(conn, station_id="lukoil_vilga", grades=["92"])
+    text = answer_question(
+        conn, station_id="lukoil_vilga", grades=["92"], question_text="сколько машин в очереди?"
+    )
     assert "~3-4 машин" in text

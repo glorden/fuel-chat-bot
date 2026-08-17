@@ -3,7 +3,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from config import FRESH_MINUTES, STALE_MINUTES
-from pipeline.facts import QueueInfo, StationBreak, StationFact, StationLimit
+from pipeline.facts import ANSWERED_GRADES, QueueInfo, StationBreak, StationFact, StationLimit
 from pipeline.resolve_station import get_brand_fuel_limit, get_station_name, resolve_brand
 from templates import render_station_answer
 
@@ -11,6 +11,28 @@ _LIMIT_QUESTION_RE = re.compile(
     r"(?i)\bлимит\w*|\bограничен\w*|\bв\s+одни\s+руки\b"
     r"|\bсколько\b.{0,25}\b(?:можно|да(?:ют|дут)|зали\w*|нальют|налива\w*|льют|отпуска\w*|отпустят)\b"
 )
+
+# Отвечаем только на то, о чём спросили (решение владельца, Этап 42): раньше
+# ответ по станции всегда нёс и перерыв, и лимит, и очередь — человек
+# спрашивал про 95, а получал четыре строки про всё сразу.
+#
+# Тему определяем по тексту вопроса регулярками, а не полем в схеме: так это
+# работает одинаково на LLM-пути и на rule-based, без правок схемы, промпта
+# и трёх клиентов. Приём в этом файле не новый — _LIMIT_QUESTION_RE выше
+# ровно так же разбирает вопрос про брендовый лимит.
+_BREAK_QUESTION_RE = re.compile(
+    r"(?i)\bперерыв\w*|\bтехперерыв\w*|\bслив\w*|\bбензовоз\w*|\bотсто\w*"
+    r"|\bзакрыт\w*|\bпересменк\w*|\bработа(?:ет|ют|ла)\b"
+)
+_QUEUE_QUESTION_RE = re.compile(
+    r"(?i)\bочеред\w*|\bмашин\w*|\bзатор\w*|\bхвост\w*|\bстоя(?:ть|т)\b"
+)
+
+# 98 и 100 убраны из отслеживания, поэтому в question_grades они физически
+# не попадают — и вопрос «98 есть?» выглядел бы как вопрос вообще без марки,
+# то есть получал бы ответ про 92 и 95. Ловим их по тексту вопроса: спросили
+# только про то, о чём мы молчим, — молчим.
+_UNTRACKED_GRADE_RE = re.compile(r"(?i)\b(?:98|100)\b")
 
 
 def _tier_for_age(age_minutes: float) -> str:
@@ -132,15 +154,46 @@ def answer_brand_limit_question(text: str) -> str | None:
     return f"{brand}: лимит {limit.liters} л в одни руки."
 
 
-def answer_question(conn: sqlite3.Connection, *, station_id: str | None, grades: list[str]) -> str | None:
+def answer_question(
+    conn: sqlite3.Connection,
+    *,
+    station_id: str | None,
+    grades: list[str],
+    question_text: str = "",
+) -> str | None:
     """None означает "нечего ответить" — станция не распознана, или по ней
-    нет ни отчётов по маркам, ни перерывов, ни лимита. В этом случае бот
-    молчит, а не пишет в чат "не понял" или "нет данных"."""
+    нет ничего из того, о чём спросили. В этом случае бот молчит, а не пишет
+    в чат "не понял" или "нет данных".
+
+    Перерыв, лимит и очередь попадают в ответ, только если о них спрашивали.
+    Это разворот прежнего прямого решения ("показываем перерыв и марки
+    вместе, одно не подменяет другое") — оно тоже было прямым решением
+    владельца и отменено таким же (Этап 42): ответ на конкретный вопрос
+    оказался важнее полноты."""
     if station_id is None:
         return None
-    facts = _latest_facts(conn, station_id, grades or None)
-    break_info = _latest_break(conn, station_id)
-    limit_info = _latest_limit(conn, station_id)
+
+    asks_break = bool(_BREAK_QUESTION_RE.search(question_text))
+    asks_limit = bool(_LIMIT_QUESTION_RE.search(question_text))
+    asks_queue = bool(_QUEUE_QUESTION_RE.search(question_text))
+
+    asked_grades = [g for g in grades if g in ANSWERED_GRADES]
+    if grades and not asked_grades and not (asks_break or asks_limit or asks_queue):
+        # Спросили только про ДТ — про него отвечают люди, не бот.
+        return None
+    if not grades and not asked_grades and not (asks_break or asks_limit or asks_queue):
+        if _UNTRACKED_GRADE_RE.search(question_text):
+            return None
+
+    facts = _latest_facts(conn, station_id, asked_grades or list(ANSWERED_GRADES))
+    break_info = _latest_break(conn, station_id) if asks_break else None
+    limit_info = _latest_limit(conn, station_id) if asks_limit else None
     if not facts and break_info is None and limit_info is None:
         return None
-    return render_station_answer(get_station_name(station_id), facts, break_info, limit_info)
+    return render_station_answer(
+        get_station_name(station_id),
+        facts,
+        break_info,
+        limit_info,
+        show_queue=asks_queue,
+    )

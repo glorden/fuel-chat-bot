@@ -19,17 +19,27 @@ def render_station_answer(
     facts: list[StationFact],
     break_info: StationBreak | None = None,
     limit_info: StationLimit | None = None,
+    show_queue: bool = False,
 ) -> str:
+    """Название станции в ответе больше не повторяется (Этап 42): бот
+    отвечает реплаем на вопрос, где станция уже названа, и дублировать её
+    длинной строкой незачем. Параметр остался ради ветки "нет данных" —
+    туда qa.py не пускает, но само сообщение осмысленно только с названием.
+
+    Перерыв, лимит и очередь сюда доходят, только если о них спрашивали —
+    решает qa.py, здесь мы просто рисуем то, что дали."""
     if not facts and break_info is None and limit_info is None:
         return f"По «{station_name}» пока нет данных в чате — никто не сообщал."
 
-    uniform_queue = _uniform_queue(facts)
-    lines = [_render_header(station_name, facts, uniform_queue)]
+    uniform_queue = _uniform_queue(facts) if show_queue else None
+    lines = []
+    if facts:
+        lines.append(_render_header(facts, uniform_queue))
     if break_info is not None:
         lines.append(_render_break_line(break_info))
     if limit_info is not None:
         lines.append(_render_limit_line(limit_info))
-    lines.extend(_render_grouped_fact_lines(facts, uniform_queue))
+    lines.extend(_render_grouped_fact_lines(facts, uniform_queue, show_queue))
     return "\n".join(lines)
 
 
@@ -52,13 +62,11 @@ def _uniform_queue(facts: list[StationFact]) -> QueueInfo | None:
     return next(iter(queues)) if len(queues) == 1 else None
 
 
-def _render_header(station_name: str, facts: list[StationFact], uniform_queue: QueueInfo | None) -> str:
-    if not facts:
-        return f"информация по {station_name}."
+def _render_header(facts: list[StationFact], uniform_queue: QueueInfo | None) -> str:
     freshest = max(facts, key=lambda f: f.reported_at)
-    time_str = freshest.reported_at.astimezone(MOSCOW_TZ).strftime("%H:%M")
+    time_str = freshest.reported_at.astimezone(MOSCOW_TZ).strftime("%H-%M")
     header_queue = f", {render_queue(uniform_queue)}" if uniform_queue else ""
-    return f"информация по {station_name} на {time_str}{header_queue}."
+    return f"инфа на {time_str}{header_queue}."
 
 
 def _render_break_line(b: StationBreak) -> str:
@@ -95,7 +103,9 @@ def _render_limit_line(limit: StationLimit) -> str:
     return f"{value} (сообщили {_format_age(limit.reported_minutes_ago)} назад)."
 
 
-def _render_grouped_fact_lines(facts: list[StationFact], uniform_queue: QueueInfo | None) -> list[str]:
+def _render_grouped_fact_lines(
+    facts: list[StationFact], uniform_queue: QueueInfo | None, show_queue: bool = False
+) -> list[str]:
     # Группируем марки с одинаковым (статус, свежесть, конфликт, очередь) в
     # одну строку — обычный случай (всё свежо, без конфликтов, очередь одна
     # на всех или её нет) даёт ровно 2 строки: "Есть"/"Нет". Марка, которая
@@ -104,7 +114,12 @@ def _render_grouped_fact_lines(facts: list[StationFact], uniform_queue: QueueInf
     # прячется молча.
     groups: dict[tuple[str, str, bool, QueueInfo | None], list[str]] = {}
     for fact in sorted(facts, key=lambda f: f.grade):
-        queue_for_line = None if fact.queue == uniform_queue else fact.queue
+        # Про очередь не спрашивали — она не должна ни попадать в строку, ни
+        # дробить группы: иначе «92, 95 - Есть» распалось бы надвое только
+        # потому, что у марок разная очередь, о которой мы всё равно молчим.
+        queue_for_line = None
+        if show_queue and fact.queue != uniform_queue:
+            queue_for_line = fact.queue
         key = (fact.status, fact.tier, fact.conflicting, queue_for_line)
         groups.setdefault(key, []).append(fact.grade)
 

@@ -428,8 +428,10 @@ def test_process_message_end_to_end_against_temp_db(monkeypatch):
         peer_id=2000000001, conversation_message_id=3, author_id=113,
     ))
     assert outcome.label == "question"
-    assert "95" in outcome.reply_text
-    assert "есть" in outcome.reply_text
+    assert "95 - Есть" in outcome.reply_text
+    # Заголовок больше не повторяет название станции: ответ уходит реплаем
+    # на вопрос, где она уже названа (Этап 42).
+    assert outcome.reply_text.startswith("инфа на ")
 
     outcome = asyncio.run(process_message(
         conn, text="Спасибо",

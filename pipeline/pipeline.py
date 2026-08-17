@@ -154,7 +154,9 @@ def _record(
         return PipelineOutcome("irrelevant")
 
     if result.message_type == "question":
-        reply_text = answer_question(conn, station_id=station_id, grades=result.question_grades)
+        reply_text = answer_question(
+            conn, station_id=station_id, grades=result.question_grades, question_text=text
+        )
         if reply_text is None and station_id is None:
             # Бренд назван (РН/ТН/Лукойл), но конкретная точка не резолвится
             # (несколько точек у бренда) — лимит общий на весь бренд, так что

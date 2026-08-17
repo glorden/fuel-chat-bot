@@ -3,10 +3,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from pipeline.extract import BreakInfo, ExtractResult, LimitInfo, ReportItem, resolve_clock_time_to_iso
-from pipeline.facts import QueueInfo
+from pipeline.facts import TRACKED_GRADES, QueueInfo
 from pipeline.resolve_station import is_known_station
 
-VALID_GRADES = {"92", "95", "98", "100", "ДТ"}
+# Один источник правды с rule-based-путём: enum в схеме инструмента — это
+# то, что физически не даёт модели вернуть 98/100 (Groq отклоняет вызов на
+# своей стороне). Промпт при этом отдельно просит их игнорировать, чтобы
+# модель не пыталась и не нарывалась на отказ API.
+VALID_GRADES = set(TRACKED_GRADES)
 MESSAGE_TYPES = {"report", "question", "irrelevant"}
 VALID_BREAK_KINDS = {"слив", "отстой", "перерыв"}
 VALID_LIMIT_STATUSES = {"limited", "unlimited"}

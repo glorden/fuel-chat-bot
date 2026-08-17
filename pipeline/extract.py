@@ -4,8 +4,11 @@ from datetime import datetime, timezone
 
 from pipeline.facts import MOSCOW_TZ, QueueInfo
 
+# 98 и 100 сюда больше не входят — см. TRACKED_GRADES. Из префильтра их при
+# этом НЕ убирали: сообщение «98 нет, зато 95 есть» должно дойти до разбора
+# целиком, иначе вместе с ненужной маркой потеряется нужная.
 _GRADE_TOKEN = re.compile(
-    r"(?i)\b(92|95|98|100)(?:-?(?:й|го|м|ый))?\b|\b(дт|дизел\w*|солярк\w*)\b"
+    r"(?i)\b(92|95)(?:-?(?:й|го|м|ый))?\b|\b(дт|дизел\w*|солярк\w*)\b"
 )
 _NEGATION_WORDS = ("нет", "закончил", "кончил", "пуст", "не осталось")
 
@@ -121,9 +124,10 @@ def _extract_grades_with_status(text: str) -> list[ReportItem]:
         for match in _GRADE_TOKEN.finditer(clause):
             after = clause[match.end() : match.end() + 15].lower()
             if re.match(r"\s*л(?:итр\w*)?\b", after):
-                # "100 л"/"100 литров" — объём в литрах (лимит отпуска), не
-                # марка топлива АИ-100. Единственная марка-число, которая
-                # реально пересекается с правдоподобным значением лимита.
+                # "92 л"/"95 литров" — объём в литрах (сколько залили или
+                # какой лимит), не марка топлива. Правило появилось из-за
+                # АИ-100, которую убрали из TRACKED_GRADES, но осталось
+                # нужным: "заправил 95 л" не должно стать фактом про 95-й.
                 continue
             grade = _normalize_grade(match.group(0))
             before = clause[: match.start()].lower()
