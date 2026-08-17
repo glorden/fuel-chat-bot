@@ -55,7 +55,8 @@ def _queue_from_row(status, minutes, cars_from, cars_to) -> QueueInfo | None:
 def _latest_facts(conn: sqlite3.Connection, station_id: str, grades: list[str] | None) -> list[StationFact]:
     query = (
         "SELECT fuel_grade, status, queue_status, queue_minutes, queue_cars_from, queue_cars_to, "
-        "reported_at FROM fuel_report WHERE station_id = ?"
+        "reported_at FROM fuel_report WHERE station_id = ? "
+        "AND id NOT IN (SELECT fact_id FROM fact_retraction WHERE fact_table = 'fuel_report')"
     )
     params: list = [station_id]
     if grades:
@@ -104,7 +105,9 @@ def _latest_break(conn: sqlite3.Connection, station_id: str) -> StationBreak | N
     человек сам решает, актуально ли ещё."""
     row = conn.execute(
         "SELECT kind, until, duration_note, reported_at FROM station_break "
-        "WHERE station_id = ? ORDER BY reported_at DESC LIMIT 1",
+        "WHERE station_id = ? "
+        "AND id NOT IN (SELECT fact_id FROM fact_retraction WHERE fact_table = 'station_break') "
+        "ORDER BY reported_at DESC LIMIT 1",
         (station_id,),
     ).fetchone()
     if row is None:
@@ -122,7 +125,9 @@ def _latest_limit(conn: sqlite3.Connection, station_id: str) -> StationLimit | N
     с возрастом, человек сам решает, актуален ли ещё."""
     row = conn.execute(
         "SELECT status, liters, reported_at FROM fuel_limit "
-        "WHERE station_id = ? ORDER BY reported_at DESC LIMIT 1",
+        "WHERE station_id = ? "
+        "AND id NOT IN (SELECT fact_id FROM fact_retraction WHERE fact_table = 'fuel_limit') "
+        "ORDER BY reported_at DESC LIMIT 1",
         (station_id,),
     ).fetchone()
     if row is None:

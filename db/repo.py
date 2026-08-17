@@ -148,6 +148,63 @@ def get_auto_reply_enabled(conn: sqlite3.Connection, *, default: bool) -> bool:
     return bool(row[0]) if row is not None else default
 
 
+# Строка "не опровергнуто" для WHERE. Имя таблицы подставляется буквально,
+# а не параметром: значения приходят только отсюда, из фиксированного
+# набора, а SQLite не разрешает параметр внутри подзапроса на месте имени.
+def _not_retracted(fact_table: str) -> str:
+    return (
+        "AND id NOT IN (SELECT fact_id FROM fact_retraction "
+        f"WHERE fact_table = '{fact_table}')"
+    )
+
+
+def latest_report_ids(conn: sqlite3.Connection, *, station_id: str, grades: list[str]) -> list[tuple[int, str]]:
+    """Строки, которые прямо сейчас формируют ответ по станции — по одной,
+    самой свежей, на марку. Именно их и опровергает !ошибка: то, что бот
+    сказал, а не всю историю станции."""
+    rows = conn.execute(
+        "SELECT id, fuel_grade FROM fuel_report WHERE station_id = ? "
+        f"{_not_retracted('fuel_report')} ORDER BY reported_at DESC",
+        (station_id,),
+    ).fetchall()
+    seen: dict[str, int] = {}
+    for row_id, grade in rows:
+        if grade in grades and grade not in seen:
+            seen[grade] = row_id
+    return [(row_id, grade) for grade, row_id in seen.items()]
+
+
+def latest_break_id(conn: sqlite3.Connection, *, station_id: str) -> int | None:
+    row = conn.execute(
+        "SELECT id FROM station_break WHERE station_id = ? "
+        f"{_not_retracted('station_break')} ORDER BY reported_at DESC LIMIT 1",
+        (station_id,),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def latest_limit_id(conn: sqlite3.Connection, *, station_id: str) -> int | None:
+    row = conn.execute(
+        "SELECT id FROM fuel_limit WHERE station_id = ? "
+        f"{_not_retracted('fuel_limit')} ORDER BY reported_at DESC LIMIT 1",
+        (station_id,),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def insert_retraction(
+    conn: sqlite3.Connection, *, fact_table: str, fact_id: int, station_id: str, retracted_by: int
+) -> None:
+    """Коммитит сама — как set_auto_reply_enabled: команда из лички идёт вне
+    пайплайна, своей транзакции на сообщение у неё нет."""
+    conn.execute(
+        "INSERT INTO fact_retraction (fact_table, fact_id, station_id, retracted_by, retracted_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (fact_table, fact_id, station_id, retracted_by, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+
+
 def set_moderation_enabled(conn: sqlite3.Connection, *, enabled: bool, changed_by: int) -> None:
     """Как set_auto_reply_enabled: вне пайплайна, поэтому коммитит сама."""
     conn.execute(

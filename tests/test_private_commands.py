@@ -83,10 +83,10 @@ def test_command_tolerates_case_and_spaces(env):
 def test_unknown_command_gets_the_list_of_commands(env):
     _conn, bot = env
 
-    _run(bot, _private("!ошибка роснефть лыжная"))
+    _run(bot, _private("!перезагрузка"))
 
     assert len(_sent(bot)) == 1
-    assert "Не знаю команду «!ошибка»" in _sent(bot)[0]
+    assert "Не знаю команду «!перезагрузка»" in _sent(bot)[0]
     assert "!помощь" in _sent(bot)[0]
 
 

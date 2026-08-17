@@ -101,6 +101,25 @@ CREATE TABLE IF NOT EXISTS moderation_setting (
     changed_by INTEGER NOT NULL,
     changed_at TEXT NOT NULL
 );
+
+-- Опровержение факта: владелец командой !ошибка помечает конкретную строку
+-- как неверную, и чтение её больше не видит (см. pipeline/qa.py).
+--
+-- Отдельной таблицей, а НЕ колонкой в самих таблицах фактов и не удалением
+-- строки: принцип «не переписывать, а копить» тут работает буквально —
+-- ошибочный факт остаётся на месте вместе с исходным текстом, из которого
+-- он извлечён, и по нему потом видно, на чём именно ошибся разбор. Живые
+-- поводы: «лимит 8 л» из «на 8 часов только ДТ», «лимит 3 л» из «3 машины
+-- на колонку» (см. PROGRESS.md, Этап 42).
+CREATE TABLE IF NOT EXISTS fact_retraction (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fact_table TEXT NOT NULL,
+    fact_id INTEGER NOT NULL,
+    station_id TEXT NOT NULL,
+    retracted_by INTEGER NOT NULL,
+    retracted_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fact_retraction_lookup ON fact_retraction (fact_table, fact_id);
 """
 
 

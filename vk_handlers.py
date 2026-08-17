@@ -1,5 +1,6 @@
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -20,7 +21,8 @@ from db.retention import apply_retention
 from db.schema import get_connection
 from pipeline.pipeline import process_message
 from pipeline.prefilter import is_on_topic
-from pipeline.resolve_station import get_displayed_brand_fuel_limits
+from pipeline.facts import ANSWERED_GRADES
+from pipeline.resolve_station import get_displayed_brand_fuel_limits, get_station_name, resolve_station
 from privacy import author_fingerprint
 from templates import render_brand_limits_list
 
@@ -268,6 +270,13 @@ def _render_private_help() -> str:
         "+ или - — то же для последнего черновика\n"
         f"Без решения черновик протухает за {MODERATION_TTL_MINUTES} мин и не отправляется.\n"
         "\n"
+        "НЕВЕРНЫЙ ФАКТ\n"
+        "!ошибка лукойл вилга — убрать всё, что бот сейчас говорит про эту\n"
+        "заправку: марки, перерыв, лимит.\n"
+        "!ошибка лукойл вилга лимит — убрать только лимит. Так же можно\n"
+        "указать «перерыв», «92» или «95».\n"
+        "Снимается один слой: под убранной записью снова видна предыдущая.\n"
+        "\n"
         "!помощь — эта справка\n"
         "\n"
         f"Сейчас: автоответ {auto_reply}, модерация {moderation}, "
@@ -347,6 +356,75 @@ async def _send_private(bot: Bot, peer_id: int, text: str) -> bool:
         except Exception:
             log.warning("Не удалось ответить в личку (попытка %s из 2)", attempt, exc_info=True)
     return False
+
+
+_ASPECT_LIMIT_RE = re.compile(r"(?i)\bлимит\w*|\bограничен\w*")
+_ASPECT_BREAK_RE = re.compile(r"(?i)\bперерыв\w*|\bслив\w*|\bбензовоз\w*|\bотсто\w*")
+_ASPECT_GRADE_RE = re.compile(r"\b(92|95)\b")
+
+
+def _retract_station_facts(argument: str, retracted_by: int) -> str:
+    """!ошибка <станция> [лимит|перерыв|92|95] — помечает как неверные те
+    записи, которые прямо сейчас формируют ответ по станции.
+
+    Без уточнения убирается всё: и марки, и перерыв, и лимит. С уточнением —
+    только названное, потому что чаще всего врёт что-то одно (живой повод:
+    «лимит 8 л», вычитанный из «на 8 часов только ДТ»).
+
+    Опровергается ровно один слой: самая свежая запись. Под ней снова
+    становится видна предыдущая — повторная команда снимет и её. Так
+    ошибочный разбор откатывается по шагам, а не стирает историю станции."""
+    station_id = resolve_station(argument)
+    if station_id is None:
+        return (
+            "Не понял, про какую заправку.\n"
+            "Например: !ошибка лукойл вилга лимит"
+        )
+
+    wants_limit = bool(_ASPECT_LIMIT_RE.search(argument))
+    wants_break = bool(_ASPECT_BREAK_RE.search(argument))
+    named_grades = _ASPECT_GRADE_RE.findall(argument)
+    # Ничего не уточнили — убираем всё, что бот сейчас говорит про станцию.
+    everything = not (wants_limit or wants_break or named_grades)
+
+    removed: list[str] = []
+
+    if everything or named_grades:
+        grades = named_grades or list(ANSWERED_GRADES)
+        for fact_id, grade in repo.latest_report_ids(_conn, station_id=station_id, grades=grades):
+            repo.insert_retraction(
+                _conn, fact_table="fuel_report", fact_id=fact_id,
+                station_id=station_id, retracted_by=retracted_by,
+            )
+            removed.append(grade)
+
+    if everything or wants_break:
+        break_id = repo.latest_break_id(_conn, station_id=station_id)
+        if break_id is not None:
+            repo.insert_retraction(
+                _conn, fact_table="station_break", fact_id=break_id,
+                station_id=station_id, retracted_by=retracted_by,
+            )
+            removed.append("перерыв")
+
+    if everything or wants_limit:
+        limit_id = repo.latest_limit_id(_conn, station_id=station_id)
+        if limit_id is not None:
+            repo.insert_retraction(
+                _conn, fact_table="fuel_limit", fact_id=limit_id,
+                station_id=station_id, retracted_by=retracted_by,
+            )
+            removed.append("лимит")
+
+    name = get_station_name(station_id)
+    if not removed:
+        return f"{name}: убирать нечего, свежих записей нет."
+
+    log.info("Опровергнуто владельцем: station_id=%s, записей %s", station_id, len(removed))
+    return (
+        f"{name}: убрал {', '.join(removed)}.\n"
+        "Под снятой записью снова видна предыдущая — повтори команду, если и она неверна."
+    )
 
 
 def _moderation_enabled() -> bool:
@@ -529,6 +607,10 @@ async def _handle_private_command(bot: Bot, message: Message) -> None:
         if _pending_drafts:
             answer += f"\nЧерновиков ждёт: {len(_pending_drafts)}."
         await _send_private(bot, message.peer_id, answer)
+        return
+
+    if name == "!ошибка":
+        await _send_private(bot, message.peer_id, _retract_station_facts(argument, message.from_id))
         return
 
     if name in ("!помощь", "!команды"):
