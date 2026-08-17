@@ -241,15 +241,38 @@ def _is_limit_list_command(text: str) -> bool:
     return text.strip().lower() in ("!лимит", "!лимиты")
 
 
-_PRIVATE_HELP = (
-    "Команды:\n"
-    "!вкл — включить автоответ на вопросы\n"
-    "!выкл — выключить автоответ\n"
-    "!модерация [вкл|выкл] — ответы ждут подтверждения здесь\n"
-    "+7 / -7 — отправить или отклонить черновик №7\n"
-    "+ / - — то же для последнего черновика\n"
-    "!помощь — этот список"
-)
+def _render_private_help() -> str:
+    """Справка вместе с текущим состоянием: сюда же приходят и черновики, и
+    подтверждения, так что «что сейчас включено» полезнее один раз показать,
+    чем заставлять вспоминать. Состояние читается из БД, а не из .env —
+    последнее там только дефолт (живая находка Этапа 40: в HANDOFF.md
+    состояние автоответа разошлось с базой)."""
+    auto_reply = "включён" if repo.get_auto_reply_enabled(_conn, default=AUTO_REPLY_ON_QUESTION) else "выключен"
+    moderation = "включена" if repo.get_moderation_enabled(_conn, default=MODERATION_ON_REPLY) else "выключена"
+    return (
+        "Команды в личке.\n"
+        "\n"
+        "ОТВЕТЫ В БЕСЕДЕ\n"
+        "!вкл — отвечать на вопросы без упоминания бота\n"
+        "!выкл — отвечать только когда бота тегнули\n"
+        "\n"
+        "МОДЕРАЦИЯ\n"
+        "!модерация — переключить режим.\n"
+        "Когда включена, готовый ответ приходит сюда карточкой с номером и\n"
+        "ждёт решения, а в беседу сам не уходит. Факты бот при этом копит\n"
+        "как обычно — придерживается только отправка.\n"
+        "\n"
+        "РЕШЕНИЕ ПО ЧЕРНОВИКУ\n"
+        "+7 — отправить черновик №7 в беседу\n"
+        "-7 — отклонить его\n"
+        "+ или - — то же для последнего черновика\n"
+        f"Без решения черновик протухает за {MODERATION_TTL_MINUTES} мин и не отправляется.\n"
+        "\n"
+        "!помощь — эта справка\n"
+        "\n"
+        f"Сейчас: автоответ {auto_reply}, модерация {moderation}, "
+        f"черновиков ждёт {len(_pending_drafts)}."
+    )
 
 
 def _parse_private_command(text: str) -> tuple[str, str] | None:
@@ -463,7 +486,7 @@ async def _handle_private_command(bot: Bot, message: Message) -> None:
     parsed = _parse_private_command(text)
     if parsed is None:
         log.info("Личное сообщение владельца — не команда, отвечаю подсказкой")
-        await _send_private(bot, message.peer_id, _PRIVATE_HELP)
+        await _send_private(bot, message.peer_id, _render_private_help())
         return
 
     # Имя команды в логе — без аргумента и без текста участника: команду
@@ -480,31 +503,35 @@ async def _handle_private_command(bot: Bot, message: Message) -> None:
         return
 
     if name == "!модерация":
+        # Голая команда переключает — по прямому решению владельца. Явные
+        # "вкл"/"выкл" тоже понимаем: набранное по привычке "!модерация вкл"
+        # при уже включённом режиме не должно его выключить.
         mode = argument.lower()
         if mode in ("вкл", "on"):
-            repo.set_moderation_enabled(_conn, enabled=True, changed_by=message.from_id)
-            await _send_private(
-                bot, message.peer_id, "Модерация включена: ответы приходят сюда на подтверждение."
+            enabled = True
+        elif mode in ("выкл", "off"):
+            enabled = False
+        else:
+            enabled = not repo.get_moderation_enabled(_conn, default=MODERATION_ON_REPLY)
+
+        repo.set_moderation_enabled(_conn, enabled=enabled, changed_by=message.from_id)
+        if enabled:
+            answer = (
+                "Модерация включена: ответы приходят сюда карточкой и ждут «+».\n"
+                "В беседу сами не уходят. Факты бот копит как обычно."
             )
-            return
-        if mode in ("выкл", "off"):
-            repo.set_moderation_enabled(_conn, enabled=False, changed_by=message.from_id)
-            await _send_private(bot, message.peer_id, "Модерация выключена: ответы уходят в беседу сразу.")
-            return
-        state = "включена" if _moderation_enabled() else "выключена"
-        await _send_private(
-            bot,
-            message.peer_id,
-            f"Модерация {state}. Черновиков ждёт: {len(_pending_drafts)}.\n"
-            "«!модерация вкл» / «!модерация выкл» — переключить.",
-        )
+        else:
+            answer = "Модерация выключена: ответы уходят в беседу сразу."
+        if _pending_drafts:
+            answer += f"\nЧерновиков ждёт: {len(_pending_drafts)}."
+        await _send_private(bot, message.peer_id, answer)
         return
 
     if name in ("!помощь", "!команды"):
-        await _send_private(bot, message.peer_id, _PRIVATE_HELP)
+        await _send_private(bot, message.peer_id, _render_private_help())
         return
 
-    await _send_private(bot, message.peer_id, f"Не знаю команду «{name}».\n\n{_PRIVATE_HELP}")
+    await _send_private(bot, message.peer_id, f"Не знаю команду «{name}».\n\n{_render_private_help()}")
 
 
 async def _alert_owner(bot: Bot, summary: str) -> None:

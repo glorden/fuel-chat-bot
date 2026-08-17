@@ -184,25 +184,38 @@ def test_facts_are_still_recorded_while_moderation_holds_the_answers(env):
     assert conn.execute("SELECT COUNT(*) FROM fuel_report").fetchone()[0] == 1
 
 
-def test_moderation_command_toggles_and_persists(env):
+def test_bare_moderation_command_toggles_the_mode(env):
+    """По прямому решению владельца команда одна и без аргумента."""
     conn, bot = env
 
-    _run(bot, _private("!модерация вкл", cmid=60))
+    _run(bot, _private("!модерация", cmid=60))
+    assert repo.get_moderation_enabled(conn, default=False) is True
+    assert "Модерация включена" in _sent(bot)[-1]
+
+    _run(bot, _private("!модерация", cmid=61))
+    assert repo.get_moderation_enabled(conn, default=True) is False
+    assert "Модерация выключена" in _sent(bot)[-1]
+
+
+def test_explicit_on_does_not_toggle_an_already_enabled_mode(env):
+    """Набранное по привычке «!модерация вкл» не должно выключить режим."""
+    conn, bot = env
+    _enable_moderation(conn)
+
+    _run(bot, _private("!модерация вкл", cmid=62))
+
     assert repo.get_moderation_enabled(conn, default=False) is True
 
-    _run(bot, _private("!модерация выкл", cmid=61))
-    assert repo.get_moderation_enabled(conn, default=True) is False
 
-
-def test_moderation_command_without_argument_reports_state(env):
+def test_toggling_reports_how_many_drafts_are_waiting(env):
     conn, bot = env
     _seed_fact(conn, bot)
     _enable_moderation(conn)
     _ask(bot)
 
-    _run(bot, _private("!модерация", cmid=62))
+    _run(bot, _private("!модерация", cmid=63))
 
-    assert "Модерация включена" in _sent(bot)[-1]
+    assert "Модерация выключена" in _sent(bot)[-1]
     assert "Черновиков ждёт: 1" in _sent(bot)[-1]
 
 

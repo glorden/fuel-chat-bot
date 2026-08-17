@@ -95,7 +95,20 @@ def test_plain_text_in_private_gets_the_list_of_commands(env):
 
     _run(bot, _private("привет"))
 
-    assert _sent(bot) == [vk_handlers._PRIVATE_HELP]
+    assert _sent(bot) == [vk_handlers._render_private_help()]
+
+
+def test_help_lists_every_command_and_the_current_state(env):
+    conn, bot = env
+    repo.set_auto_reply_enabled(conn, enabled=True, changed_by=ADMIN)
+
+    _run(bot, _private("!помощь"))
+
+    help_text = _sent(bot)[0]
+    for command in ("!вкл", "!выкл", "!модерация", "+7", "-7", "!помощь"):
+        assert command in help_text
+    assert "автоответ включён" in help_text
+    assert "модерация выключена" in help_text
 
 
 def test_report_sent_in_private_never_becomes_a_fact(env):
@@ -106,7 +119,7 @@ def test_report_sent_in_private_never_becomes_a_fact(env):
     _run(bot, _private("Лукойл Вилга только 92 на табло"))
 
     assert conn.execute("SELECT COUNT(*) FROM fuel_report").fetchone()[0] == 0
-    assert _sent(bot) == [vk_handlers._PRIVATE_HELP]
+    assert _sent(bot) == [vk_handlers._render_private_help()]
 
 
 def test_the_same_text_in_the_chat_does_become_a_fact(env):
